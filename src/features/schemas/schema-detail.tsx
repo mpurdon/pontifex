@@ -384,6 +384,32 @@ export function SchemaDetailPanel({
       {findings.length > 0 && (
         <div className="max-h-32 shrink-0 overflow-auto border-t border-edge bg-surface-1 p-2">
           <FindingList findings={findings} />
+          {/* Offered beside the finding rather than in the toolbar, so the
+              repair stays attached to the reason for it. The validator says
+              which findings have one; the editor does not guess. */}
+          {findings.some((f) => f.fix === 'widenNullable') && (
+            <div className="mt-1 pl-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                title={
+                  'Rewrite every `nullable: true` as a type that includes "null", ' +
+                  'which draft-07 honours — then review the diff before saving.'
+                }
+                onClick={async () => {
+                  try {
+                    const repair = await ipc.widenNullableSchema(JSON.parse(text))
+                    setDraft(stringify(repair.content))
+                    setView('diffLive')
+                  } catch {
+                    // A parse failure is already surfaced by the editor banner.
+                  }
+                }}
+              >
+                Fix all <span className="font-mono">nullable</span> fields
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

@@ -301,11 +301,20 @@ export interface SchemaSummary {
 
 export type Severity = 'error' | 'warning'
 
+/**
+ * A mechanical whole-document repair that clears a finding.
+ *
+ * Sent by the validator rather than inferred from the message, so rewording a
+ * sentence cannot silently remove the button that acts on it.
+ */
+export type Fix = 'widenNullable'
+
 export interface Finding {
   severity: Severity
   /** JSON Pointer into the document. */
   path: string
   message: string
+  fix?: Fix
 }
 
 export interface ValidationReport {

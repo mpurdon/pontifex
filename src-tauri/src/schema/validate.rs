@@ -15,6 +15,20 @@ pub enum Severity {
     Warning,
 }
 
+/// A repair gebman can apply to the whole document to clear a finding.
+///
+/// Carried on the finding rather than inferred by the editor: the alternative
+/// was matching the message prose, which makes rewording a sentence silently
+/// remove a button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Fix {
+    /// Rewrite every `nullable: true` as `type: [T, "null"]` —
+    /// [`crate::schema::openapi::widen_nullable`], exposed as the
+    /// `widen_nullable_schema` command.
+    WidenNullable,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Finding {
@@ -22,6 +36,9 @@ pub struct Finding {
     /// JSON Pointer into the document, so the editor can jump to it.
     pub path: String,
     pub message: String,
+    /// Set when this finding has a mechanical whole-document repair.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<Fix>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,6 +66,7 @@ fn error(path: &str, message: impl Into<String>) -> Finding {
         severity: Severity::Error,
         path: path.to_string(),
         message: message.into(),
+        fix: None,
     }
 }
 
@@ -57,6 +75,7 @@ fn warning(path: &str, message: impl Into<String>) -> Finding {
         severity: Severity::Warning,
         path: path.to_string(),
         message: message.into(),
+        fix: None,
     }
 }
 
@@ -289,6 +308,7 @@ impl Parity {
             findings,
             Severity::Warning,
             &self.nullable,
+            Some(Fix::WidenNullable),
             &format!(
                 "`nullable: true` does not allow nulls at runtime. It is an OpenAPI keyword; \
                  the bus validates with Ajv, which has no implementation of it and ignores it \
@@ -304,6 +324,7 @@ impl Parity {
             findings,
             Severity::Error,
             &self.dialect,
+            None,
             "`$schema` names a dialect the bus cannot load. It compiles with Ajv's draft-07 \
              meta-schema and would throw on load, so no event of this type would ever be \
              graded. Remove `$schema`, or set it to draft-07.",
@@ -315,6 +336,7 @@ impl Parity {
                     findings,
                     Severity::Warning,
                     sites,
+                    None,
                     &format!(
                         "`{keyword}` was added after draft-07, and the bus validates with \
                          draft-07 — it is ignored, so it constrains nothing ({note})."
@@ -327,6 +349,7 @@ impl Parity {
             findings,
             Severity::Warning,
             &self.ref_siblings,
+            None,
             "In draft-07 a `$ref` replaces its whole schema object, so keywords written \
              beside it are discarded. Move them into the referenced type, or wrap the \
              `$ref` in an `allOf`.",
@@ -336,6 +359,7 @@ impl Parity {
             findings,
             Severity::Error,
             &self.boolean_exclusives,
+            None,
             "`exclusiveMinimum`/`exclusiveMaximum` must be numbers in draft-07; a boolean is \
              the draft-04 spelling and Ajv rejects the schema outright, so nothing of this \
              type would be graded.",
@@ -346,6 +370,7 @@ impl Parity {
                 findings,
                 Severity::Warning,
                 sites,
+                None,
                 &format!(
                     "`format: {format}` is not one the bus knows. Ajv logs an unknown format \
                      and moves on, so this documents an intention without enforcing it — any \
@@ -358,6 +383,7 @@ impl Parity {
             findings,
             Severity::Warning,
             &self.numeric_formats,
+            None,
             "The bus asserts this format against numbers, and gebman's validator only ever \
              sees strings — so events are graded here without it. The check is real in \
              production; this report just cannot reproduce it.",
@@ -370,12 +396,19 @@ impl Parity {
 /// Every parity finding has the same shape — first offending pointer as the
 /// jump target, the sites appended to the prose — and writing that out six
 /// times was six chances for the convention to drift. It already had.
-fn aggregate(findings: &mut Vec<Finding>, severity: Severity, sites: &Sites, message: &str) {
+fn aggregate(
+    findings: &mut Vec<Finding>,
+    severity: Severity,
+    sites: &Sites,
+    fix: Option<Fix>,
+    message: &str,
+) {
     let Some(path) = &sites.path else { return };
     findings.push(Finding {
         severity,
         path: path.clone(),
         message: format!("{message} At {}.", sites.listed()),
+        fix,
     });
 }
 
@@ -417,6 +450,7 @@ fn check_registry_name(expected_name: Option<&str>, findings: &mut Vec<Finding>)
             rendered.join(", "),
             crate::schema::model::sanitize_schema_name(name)
         ),
+        fix: None,
     });
 }
 
@@ -537,6 +571,7 @@ fn check_envelope(
                 severity,
                 path: format!("{BASE}/x-amazon-events-source"),
                 message,
+                fix: None,
             });
         }
     }
@@ -945,6 +980,28 @@ mod tests {
         assert_eq!(nullable_findings.len(), 1);
         assert!(nullable_findings[0].message.contains("20 fields are affected"));
         assert!(nullable_findings[0].message.contains("and 15 more"));
+    }
+
+    #[test]
+    fn the_nullable_finding_carries_its_repair_and_others_do_not() {
+        // The editor renders the "fix all" button off this field. It used to
+        // match the message prose, so rewording the sentence would have removed
+        // the button with nothing failing.
+        let doc = with_payload_field(json!({ "type": "string", "nullable": true }));
+        let report = validate(&doc, None);
+
+        let fixable: Vec<&Finding> =
+            report.findings.iter().filter(|f| f.fix.is_some()).collect();
+        assert_eq!(fixable.len(), 1, "{:?}", report.findings);
+        assert_eq!(fixable[0].fix, Some(Fix::WidenNullable));
+        assert!(fixable[0].message.contains("nullable"));
+
+        // And applying it clears the finding, which is the button's contract.
+        let repaired = openapi::widen_nullable(&doc);
+        assert!(validate(&repaired, None)
+            .findings
+            .iter()
+            .all(|f| f.fix.is_none()));
     }
 
     #[test]
