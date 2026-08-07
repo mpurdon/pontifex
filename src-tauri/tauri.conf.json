@@ -1,0 +1,45 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "gebman",
+  "version": "0.1.0",
+  "identifier": "com.trajectorservices.gebman",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1428",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "gebman — Global Event Bus Manager",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1000,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost; worker-src 'self' blob:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app", "msi", "nsis", "deb", "appimage"],
+    "category": "DeveloperTool",
+    "shortDescription": "EventBridge schema registry manager",
+    "longDescription": "Browse, edit, generate and register EventBridge schemas for the Trajector Global Event Bus, with CloudWatch event log viewing and bus topology inspection.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}

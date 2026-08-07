@@ -1,0 +1,66 @@
+[package]
+name = "gebman"
+version = "0.1.0"
+description = "Desktop manager for the Trajector Global Event Bus"
+authors = ["Matthew Purdon <matthew.purdon@trajectorservices.com>"]
+license = "MIT"
+repository = ""
+edition = "2021"
+rust-version = "1.82"
+
+[lib]
+name = "gebman_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+thiserror = "2"
+anyhow = "1"
+log = "0.4"
+
+tokio = { version = "1", features = ["sync", "time", "process", "fs", "rt", "macros"] }
+futures = "0.3"
+
+aws-config = { version = "1.10", features = ["behavior-version-latest", "sso"] }
+aws-credential-types = "1"
+aws-smithy-types = "1"
+aws-smithy-runtime-api = "1"
+aws-types = "1"
+aws-sdk-sts = "1"
+aws-sdk-sso = "1"
+aws-sdk-ssooidc = "1"
+aws-sdk-schemas = "1"
+aws-sdk-eventbridge = "1"
+aws-sdk-cloudwatchlogs = "1"
+aws-sdk-bedrock = "1"
+aws-sdk-bedrockruntime = "1"
+
+# Jira: OAuth 2.0 (3LO) over HTTPS, with the tokens in the OS keychain rather
+# than beside settings.json.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+jsonschema = "0.34"
+# The `regex` format has to accept every pattern JavaScript's `RegExp` accepts,
+# which means lookaround and backreferences the `regex` crate does not support.
+# Already in the tree via `jsonschema`, which compiles `pattern` with it.
+fancy-regex = "0.16"
+regex = "1"
+sha1 = "0.10"
+hex = "0.4"
+time = { version = "0.3", features = ["formatting", "parsing", "serde", "macros"] }
+dirs = "6"
+uuid = { version = "1", features = ["v4"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

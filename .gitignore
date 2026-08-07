@@ -1,0 +1,27 @@
+# Logs
+# Anchored to the repo root: a bare `logs` also matches src/features/logs/,
+# which silently excludes that feature from git *and* from Tailwind's class
+# scanning (Tailwind v4 honours .gitignore when detecting sources).
+/logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

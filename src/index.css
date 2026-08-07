@@ -1,0 +1,120 @@
+@import 'tailwindcss';
+
+/*
+ * gebman's visual language: a dense, dark developer tool. Neutral slate
+ * surfaces with a single amber accent, so status colours (red/green/amber for
+ * validation and drift) carry meaning rather than competing with the chrome.
+ */
+@theme {
+  --color-surface-0: oklch(0.18 0.012 265);
+  --color-surface-1: oklch(0.22 0.013 265);
+  --color-surface-2: oklch(0.26 0.014 265);
+  --color-surface-3: oklch(0.31 0.015 265);
+
+  --color-edge: oklch(0.34 0.016 265);
+  --color-edge-strong: oklch(0.44 0.018 265);
+
+  --color-ink: oklch(0.94 0.005 265);
+  --color-ink-muted: oklch(0.72 0.012 265);
+  --color-ink-faint: oklch(0.56 0.014 265);
+
+  --color-accent: oklch(0.78 0.15 75);
+  --color-accent-dim: oklch(0.62 0.13 75);
+
+  --color-ok: oklch(0.75 0.16 155);
+  --color-warn: oklch(0.8 0.15 85);
+  --color-danger: oklch(0.68 0.19 25);
+  --color-info: oklch(0.72 0.13 240);
+
+  /*
+   * Report statuses that need their own hue.
+   *
+   * "Failing" and "missing" are both serious but mean different things, and two
+   * shades of the same red is not a distinction you can read in a stacked bar.
+   * Purple separates them; orange marks a schema that could not be graded at
+   * all, which is a third thing again.
+   */
+  --color-violet: oklch(0.68 0.18 300);
+  --color-orange: oklch(0.72 0.17 50);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface-0);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  /* A desktop app should not rubber-band. */
+  overscroll-behavior: none;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface-3);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-edge-strong);
+  background-clip: content-box;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.monaco-editor,
+.monaco-editor .overflow-guard {
+  border-radius: 6px;
+}
+
+/*
+ * Version-timeline glow.
+ *
+ * Sliding between versions re-renders the tree with different rows marked, and
+ * a static colour change is easy to miss when the whole pane repaints at once.
+ * The glow fires once per version step and settles, so the eye is pulled to
+ * what moved without leaving the row permanently louder than its neighbours.
+ */
+@keyframes change-glow {
+  0% {
+    box-shadow: 0 0 0 0 transparent;
+    background-color: transparent;
+  }
+  30% {
+    box-shadow: 0 0 12px 1px var(--glow-tint);
+    background-color: var(--glow-tint);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.glow-on-change {
+  animation: change-glow 1.1s ease-out;
+}
+
+/* Honour a reduced-motion preference: the colour still identifies the row. */
+@media (prefers-reduced-motion: reduce) {
+  .glow-on-change {
+    animation: none;
+  }
+}
