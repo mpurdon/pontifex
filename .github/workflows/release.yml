@@ -1,0 +1,116 @@
+# Release automation: push a tag like v0.2.0 and this workflow
+#   1. verifies the tag matches the app version in tauri.conf.json
+#   2. builds the macOS .app (arm64) and runs the Rust test suite
+#   3. publishes a GitHub release with the .app tarball
+#   4. bumps version + sha256 in mpurdon/homebrew-tap so
+#      `brew upgrade` picks it up
+#
+# Step 4 needs a TAP_GITHUB_TOKEN repo secret: a fine-grained PAT with
+# contents:read/write on mpurdon/homebrew-tap. Without it the release
+# still publishes and the tap bump is skipped with a notice.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest # arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches app version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION=$(jq -r .version src-tauri/tauri.conf.json)
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::tag v$TAG does not match tauri.conf.json version $VERSION"
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend tests
+        run: pnpm test
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --lib
+
+      # Signing + notarization activate automatically when the APPLE_*
+      # secrets exist; with them absent the build is ad-hoc signed (the
+      # pre-Developer-ID behavior). Tauri imports the certificate into a
+      # temporary keychain and runs notarytool + stapling itself.
+      - name: Configure signing & notarization
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PW: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          AID: ${{ secrets.APPLE_ID }}
+          APW: ${{ secrets.APPLE_PASSWORD }}
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          put() { if [ -n "$2" ]; then printf '%s=%s\n' "$1" "$2" >> "$GITHUB_ENV"; fi; }
+          put APPLE_CERTIFICATE "$CERT"
+          put APPLE_CERTIFICATE_PASSWORD "$CERT_PW"
+          put APPLE_SIGNING_IDENTITY "$IDENTITY"
+          put APPLE_ID "$AID"
+          put APPLE_PASSWORD "$APW"
+          put APPLE_TEAM_ID "$TEAM"
+          if [ -n "$CERT" ]; then echo "::notice::Developer ID signing enabled"; else echo "::notice::no signing secrets — building ad-hoc signed"; fi
+
+      - name: Build app bundle
+        # DMG bundling drives Finder via AppleScript and cannot run
+        # headless — the cask installs from the .app tarball anyway.
+        run: pnpm tauri build --bundles app
+
+      - name: Package tarball
+        id: pkg
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd src-tauri/target/release/bundle/macos
+          tar -czf "pontifex_${VERSION}_aarch64.app.tar.gz" pontifex.app
+          echo "sha=$(shasum -a 256 "pontifex_${VERSION}_aarch64.app.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "file=src-tauri/target/release/bundle/macos/pontifex_${VERSION}_aarch64.app.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "${{ steps.pkg.outputs.file }}" \
+            --title "pontifex $GITHUB_REF_NAME" \
+            --generate-notes
+
+      - name: Bump Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::notice::TAP_GITHUB_TOKEN not set — skipping tap bump. Update Casks/pontifex.rb manually."
+            exit 0
+          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA="${{ steps.pkg.outputs.sha }}"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/mpurdon/homebrew-tap.git" tap
+          cd tap
+          sed -i '' -E "s|^  version \".*\"|  version \"${VERSION}\"|" Casks/pontifex.rb
+          sed -i '' -E "s|^  sha256 \".*\"|  sha256 \"${SHA}\"|" Casks/pontifex.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "pontifex ${VERSION}"
+          git push
