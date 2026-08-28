@@ -7,6 +7,7 @@ use crate::logging::cat;
 use crate::schema::events::{self, EventCheckReport, FieldObservation};
 use crate::events_cache::{cache_key, parse_event, CachedEvent};
 use crate::schema::model::{self, EventIdentity};
+use crate::schema::repair::{self, Repair};
 use crate::settings::Environment;
 use crate::state::AppState;
 use futures::stream::StreamExt;
@@ -1004,6 +1005,24 @@ pub fn apply_field_suggestions(
 ) -> Result<Value> {
     let document = model::parse_content(&content)?;
     Ok(events::suggest_additions(&document, &type_name, &fields))
+}
+
+/// Apply one issue's repair to the draft.
+///
+/// The repair travels out to the panel on the issue and comes back with the
+/// click, so what is applied is what was offered — the alternative, re-deriving
+/// it here from a path and a kind, would let the two disagree with nothing
+/// failing to say so. Returns the patched document for review; nothing is
+/// written to AWS.
+#[tauri::command]
+pub fn apply_issue_repair(
+    content: Value,
+    type_name: String,
+    path: String,
+    repair: Repair,
+) -> Result<Value> {
+    let document = model::parse_content(&content)?;
+    repair::apply(&document, &type_name, &path, &repair)
 }
 
 #[cfg(test)]

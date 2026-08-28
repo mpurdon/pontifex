@@ -349,11 +349,11 @@ function PendingDraftPanel({
     }
   }, [text])
 
-  const save = async () => {
+  const save = async (description?: string) => {
     setSaving(true)
     setError(null)
     try {
-      await ipc.putSchema(name, JSON.parse(text), undefined, envId)
+      await ipc.putSchema(name, JSON.parse(text), description, envId)
       setConfirmingSave(false)
       onSaved(name)
     } catch (e) {
@@ -363,11 +363,9 @@ function PendingDraftPanel({
     }
   }
 
-  // Creating in a protected environment gets the same review as an update.
-  const requestSave = () => {
-    if (activeEnvironment?.protected) setConfirmingSave(true)
-    else void save()
-  }
+  // The dialog is where the version description is written, so a create goes
+  // through it too. Only a protected environment is gated by it.
+  const requestSave = () => setConfirmingSave(true)
 
   return (
     <div className="flex h-full flex-col">
@@ -482,8 +480,9 @@ function PendingDraftPanel({
         isNew
         saving={saving}
         error={error}
+        requiresAcknowledgement={activeEnvironment?.protected ?? false}
         onCancel={() => setConfirmingSave(false)}
-        onConfirm={() => void save()}
+        onConfirm={(description) => void save(description)}
       />
 
       <div className="min-h-0 flex-1">

@@ -283,6 +283,9 @@ mod tests {
             rejects: true,
             example: Some(json!("14")),
             message: Some("\"14\" is not of type \"integer\"".into()),
+            fix: Some(crate::schema::repair::Repair::WidenType {
+                types: vec!["integer".into(), "string".into()],
+            }),
         }
     }
 

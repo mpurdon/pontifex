@@ -4,11 +4,14 @@ import {
   AlertTriangle,
   Bug,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Database,
   Info,
-  Plus,
   RefreshCw,
   Sparkles,
+  Undo2,
+  Wand2,
   XCircle,
 } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
@@ -20,6 +23,8 @@ import type {
   IssueKind,
   IssueSeverity,
   RealityCheckResult,
+  Repair,
+  RepairSuggestion,
   TicketContext,
 } from '@/lib/types'
 import {
@@ -34,6 +39,7 @@ import {
   cn,
 } from '@/components/ui'
 import { WINDOWS, formatAge } from '@/lib/format'
+import { examplesFor, repairLabel } from '@/lib/repair'
 import { FileTicketDialog, FiledChip } from '@/features/jira/file-ticket-dialog'
 
 /**
@@ -48,6 +54,14 @@ function preview(value: unknown): string {
   if (value === undefined) return ''
   const text = JSON.stringify(value) ?? String(value)
   return text.length > 60 ? `${text.slice(0, 60)}…` : text
+}
+
+/** How a row left the working list. */
+interface Resolution {
+  /** `fixed` edited the draft; `filed` only recorded the problem elsewhere. */
+  how: 'fixed' | 'filed'
+  path: string
+  label: string
 }
 
 /**
@@ -88,11 +102,31 @@ export function AnalysisPanel({
   const [minutes, setMinutes] = useState(1440)
   const [result, setResult] = useState<RealityCheckResult | null>(null)
   const [live, setLive] = useState(true)
+  /** What has been dealt with this session, keyed by issue. */
+  const [resolved, setResolved] = useState<Record<string, Resolution>>({})
 
   /** Both paths land here: a result is a result, however it was fetched. */
   const receive = (next: RealityCheckResult) => {
     setResult(next)
     onCoverage(next.coverage, next.sampled)
+
+    // A repair that did not actually clear its issue brings the row back.
+    //
+    // Hiding on click is what makes the list workable, but it is a claim about
+    // the document, and the next check is what can confirm it. Widening a type
+    // on a field that is also rejected by a pattern leaves the row reported —
+    // and a still-failing field that has been struck off the list is the one
+    // outcome this panel must not produce. Filed rows are not a claim about
+    // the document, so they stay put.
+    setResolved((prev) => {
+      const stillReported = new Set(next.issues.map((i) => i.key))
+      const kept = Object.entries(prev).filter(
+        ([key, entry]) => entry.how === 'filed' || !stillReported.has(key),
+      )
+      return kept.length === Object.keys(prev).length
+        ? prev
+        : Object.fromEntries(kept)
+    })
   }
 
   const check = useMutation<RealityCheckResult, IpcError, boolean | void>({
@@ -140,32 +174,84 @@ export function AnalysisPanel({
   })
 
   /**
-   * Declaring one field at a time, including nested ones — the backend walks
-   * the ref graph to find whichever type actually owns the path.
+   * Apply the repair the row is offering.
+   *
+   * Every repairable kind goes through here — widening a type, extending an
+   * enum, dropping a `required`, declaring a field. The repair travels back
+   * exactly as it arrived on the issue, so what is applied is what was offered.
+   * The result lands in the draft, where it is reviewed as a diff like any
+   * other edit; nothing is written to AWS.
    */
-  const addOne = useMutation<unknown, IpcError, FieldObservation>({
-    mutationFn: (field) =>
-      ipc.addObservedField(document, result!.typeName, field),
-    onSuccess: onApplySuggestions,
+  const applyRepair = useMutation<
+    unknown,
+    IpcError,
+    { issue: Issue; repair: Repair }
+  >({
+    mutationFn: ({ issue, repair }) =>
+      ipc.applyIssueRepair(document, result!.typeName, issue.path, repair),
+    onSuccess: (next, { issue, repair }) => {
+      onApplySuggestions(next)
+      setResolved((prev) => ({
+        ...prev,
+        [issue.key]: { how: 'fixed', path: issue.path, label: repairLabel(repair) },
+      }))
+    },
   })
+
+  /**
+   * Ask a model what to do about a row the local planner could not decide.
+   *
+   * The four mechanical repairs are computed from the sample and cost nothing,
+   * so this is only offered where there is no `fix`: a rejected pattern, a
+   * bound, a shape the sample does not settle. What comes back is the same
+   * `Repair` the button already applies, so an AI-chosen edit gets the same
+   * diff review as a computed one.
+   */
+  const suggest = useMutation<
+    { issue: Issue; suggestion: RepairSuggestion },
+    IpcError,
+    Issue
+  >({
+    mutationFn: async (issue) => ({
+      issue,
+      suggestion: await ipc.aiSuggestRepair({
+        content: document,
+        typeName: result!.typeName,
+        issue,
+        examples: examplesFor(result, issue),
+      }),
+    }),
+    onSuccess: ({ issue, suggestion }) =>
+      setSuggestions((prev) => ({ ...prev, [issue.key]: suggestion })),
+  })
+
+  const [suggestions, setSuggestions] = useState<Record<string, RepairSuggestion>>({})
 
   // Memoised on the result: `document` changes on every keystroke while the
   // panel sits mounted behind the other tabs, and none of this depends on it.
-  const { topLevelUndeclared, undeclaredByPath, actionable } = useMemo(() => {
+  const { topLevelUndeclared, actionable } = useMemo(() => {
     const undeclared = result?.drift.undeclared ?? []
     return {
       // The bulk apply is top-level only — `suggest_additions` skips nested
       // paths, so offering them here would silently drop them. The per-row
-      // declare below has no such limit.
+      // repair below has no such limit.
       topLevelUndeclared: undeclared.filter(
         (f) => !f.path.includes('.') && !f.path.includes('[]'),
       ),
-      /** The observation behind an `undeclared` issue, for one-click declaring. */
-      undeclaredByPath: new Map(undeclared.map((f) => [f.path, f])),
       /** Info-level entries are FYI; "clean" means nothing above them. */
       actionable: result?.issues.filter((i) => i.severity !== 'info') ?? [],
     }
   }, [result])
+
+  /** The working list: what is left to deal with. */
+  const outstanding = useMemo(
+    () => result?.issues.filter((i) => !resolved[i.key]) ?? [],
+    [result, resolved],
+  )
+  // Everything dealt with this session, including repairs the re-check can no
+  // longer see — those are exactly the ones that worked, and a record that
+  // drops them the moment they succeed is no record at all.
+  const resolvedEntries = useMemo(() => Object.entries(resolved), [resolved])
 
   // Is filing even possible? Read once rather than per row — it is a keychain
   // lookup, not a network call, but it is the same answer for every issue.
@@ -178,10 +264,6 @@ export function AnalysisPanel({
   const [filing, setFiling] = useState<Issue | null>(null)
   /** Tickets filed in this session, so the row can show where it went. */
   const [filed, setFiled] = useState<Record<string, FiledTicket>>({})
-
-  /** The observation to declare for an issue, when there is one. */
-  const declarable = (issue: Issue) =>
-    issue.path.includes('[]') ? undefined : undeclaredByPath.get(issue.path)
 
   const ticketContext: TicketContext | null = result
     ? {
@@ -314,16 +396,47 @@ export function AnalysisPanel({
               </div>
             )}
 
+            {resolvedEntries.length > 0 && (
+              <ResolvedSummary
+                entries={resolvedEntries}
+                onRestore={(key) =>
+                  setResolved((prev) => {
+                    const next = { ...prev }
+                    delete next[key]
+                    return next
+                  })
+                }
+              />
+            )}
+
             <ul className="flex flex-col gap-2">
-              {result.issues.map((issue) => (
+              {outstanding.map((issue) => (
                 <IssueRow
                   key={issue.key}
                   issue={issue}
                   // Nested paths included: the backend walks the ref graph to
                   // find whichever type owns `metadata.trackingId`. Only a bare
-                  // array element has no property to add.
-                  onDeclare={declarable(issue) ? () => addOne.mutate(declarable(issue)!) : undefined}
-                  declaring={addOne.isPending}
+                  // array element has no property to repair, and the backend
+                  // withholds the repair for those.
+                  onFix={
+                    issue.fix
+                      ? () => applyRepair.mutate({ issue, repair: issue.fix! })
+                      : undefined
+                  }
+                  fixing={applyRepair.isPending}
+                  suggestion={suggestions[issue.key]}
+                  onSuggest={
+                    // Only where nothing mechanical applies: the computed
+                    // repairs are free and immediate, and asking a model to
+                    // re-derive one would be slower and no better.
+                    !issue.fix && issue.severity !== 'info'
+                      ? () => suggest.mutate(issue)
+                      : undefined
+                  }
+                  suggesting={suggest.isPending && suggest.variables?.key === issue.key}
+                  onApplySuggestion={(repair) =>
+                    applyRepair.mutate({ issue, repair })
+                  }
                   filed={filed[issue.key]}
                   onFile={
                     // Info-level rows are notes, not bugs — nobody wants a
@@ -342,6 +455,13 @@ export function AnalysisPanel({
                 This schema matches every sampled event, with no undeclared fields.
               </Note>
             )}
+
+            {actionable.length > 0 && outstanding.length === 0 && (
+              <Note tone="ok">
+                Everything reported has been dealt with. Save the draft to
+                publish a new version.
+              </Note>
+            )}
           </>
         )}
 
@@ -358,9 +478,14 @@ export function AnalysisPanel({
           <ErrorBox error={applySuggestions.error} />
         </div>
       )}
-      {addOne.isError && (
+      {applyRepair.isError && (
         <div className="p-2">
-          <ErrorBox error={addOne.error} />
+          <ErrorBox error={applyRepair.error} />
+        </div>
+      )}
+      {suggest.isError && (
+        <div className="p-2">
+          <ErrorBox error={suggest.error} />
         </div>
       )}
 
@@ -370,9 +495,22 @@ export function AnalysisPanel({
           issue={filing}
           context={ticketContext}
           onClose={() => setFiling(null)}
-          onFiled={(issueKey, ticket) =>
+          onFiled={(issueKey, ticket) => {
             setFiled((prev) => ({ ...prev, [issueKey]: ticket }))
-          }
+            // Filed is dealt with, even though the document did not change:
+            // the problem now belongs to whoever owns the producer, and
+            // leaving it in the working list means meeting it again on every
+            // pass down the same list.
+            const issue = result?.issues.find((i) => i.key === issueKey)
+            setResolved((prev) => ({
+              ...prev,
+              [issueKey]: {
+                how: 'filed',
+                path: issue?.path ?? issueKey,
+                label: ticket.key,
+              },
+            }))
+          }}
         />
       )}
     </div>
@@ -407,16 +545,26 @@ const SEVERITY_STYLES: Record<
  */
 function IssueRow({
   issue,
-  onDeclare,
-  declaring,
+  onFix,
+  fixing,
+  suggestion,
+  onSuggest,
+  suggesting,
+  onApplySuggestion,
   onFile,
   canFile,
   filed,
 }: {
   issue: Issue
-  /** Present only for an undeclared top-level field, which can be added here. */
-  onDeclare?: () => void
-  declaring: boolean
+  /** Applies the repair the issue carries. Absent when it carries none. */
+  onFix?: () => void
+  fixing: boolean
+  /** A model's proposal, once asked for. */
+  suggestion?: RepairSuggestion
+  /** Offered only where no mechanical repair applies. */
+  onSuggest?: () => void
+  suggesting: boolean
+  onApplySuggestion: (repair: Repair) => void
   /** Opens the ticket preview. Absent for rows not worth filing. */
   onFile?: () => void
   /** Whether Jira is connected — the button explains itself when it is not. */
@@ -438,17 +586,6 @@ function IssueRow({
         <p className="min-w-0 flex-1 text-[11px] leading-snug text-ink-muted">
           <Marked text={issue.summary} />
         </p>
-        {onDeclare && (
-          <button
-            type="button"
-            onClick={onDeclare}
-            disabled={declaring}
-            title={`Declare ${issue.path} in the draft`}
-            className="shrink-0 rounded p-0.5 text-ink-faint hover:bg-surface-3 hover:text-accent disabled:opacity-40"
-          >
-            <Plus className="size-3" />
-          </button>
-        )}
       </div>
 
       <div className="mt-1 flex flex-wrap items-center gap-1.5 pl-5">
@@ -474,26 +611,57 @@ function IssueRow({
             e.g. {preview(issue.example)}
           </span>
         )}
-        {filed ? (
-          <FiledChip ticket={filed} />
-        ) : (
-          onFile && (
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {/* The repair sits beside the reason for it, and says what it will
+              do rather than "Fix" — `Redeclare as string | null` is a claim
+              you can disagree with before clicking, which "Fix" is not. */}
+          {onFix && issue.fix && (
             <button
               type="button"
-              onClick={onFile}
-              disabled={!canFile}
-              title={
-                canFile
-                  ? 'File this with the team that owns the producer'
-                  : 'Connect Jira in Settings → Jira to file this'
-              }
-              className="ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-faint hover:bg-surface-3 hover:text-accent disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-faint"
+              onClick={onFix}
+              disabled={fixing}
+              title={`${repairLabel(issue.fix)} in the draft — reviewed as a diff, nothing is saved to AWS`}
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-accent hover:bg-surface-3 disabled:opacity-40"
             >
-              <Bug className="size-2.5" />
-              File
+              <Wand2 className="size-2.5" />
+              {repairLabel(issue.fix)}
             </button>
-          )
-        )}
+          )}
+
+          {onSuggest && !suggestion && (
+            <button
+              type="button"
+              onClick={onSuggest}
+              disabled={suggesting}
+              title="Ask a model what to do about this, from the values real events carry"
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-faint hover:bg-surface-3 hover:text-accent disabled:opacity-40"
+            >
+              <Sparkles className="size-2.5" />
+              {suggesting ? 'Asking…' : 'Suggest'}
+            </button>
+          )}
+
+          {filed ? (
+            <FiledChip ticket={filed} />
+          ) : (
+            onFile && (
+              <button
+                type="button"
+                onClick={onFile}
+                disabled={!canFile}
+                title={
+                  canFile
+                    ? 'File this with the team that owns the producer'
+                    : 'Connect Jira in Settings → Jira to file this'
+                }
+                className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-faint hover:bg-surface-3 hover:text-accent disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-faint"
+              >
+                <Bug className="size-2.5" />
+                File
+              </button>
+            )
+          )}
+        </div>
       </div>
 
       {/* The validator's own words. For a rejection nothing else explains,
@@ -511,6 +679,106 @@ function IssueRow({
       <p className="mt-1 pl-5 text-[10px] leading-snug text-ink-faint">
         <Marked text={issue.action} />
       </p>
+
+      {/* A model's proposal, shown with its reasoning and not applied until
+          asked. The rationale is the part worth reading: it says what the edit
+          gives up, which is the half of the decision the row cannot show. */}
+      {suggestion && (
+        <div className="mt-1.5 ml-5 rounded border border-edge bg-surface-2/50 px-2 py-1.5">
+          <p className="text-[10px] leading-snug text-ink-muted">
+            {suggestion.rationale}
+          </p>
+          {suggestion.repair ? (
+            <button
+              type="button"
+              onClick={() => onApplySuggestion(suggestion.repair!)}
+              disabled={fixing}
+              className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-accent hover:bg-surface-3 disabled:opacity-40"
+            >
+              <Wand2 className="size-2.5" />
+              {repairLabel(suggestion.repair)}
+            </button>
+          ) : (
+            <p className="mt-1 text-[10px] text-ink-faint">
+              No mechanical edit proposed — this one wants a decision.
+            </p>
+          )}
+        </div>
+      )}
     </li>
+  )
+}
+
+/**
+ * What has been dealt with, rolled up out of the way.
+ *
+ * The working list is only workable if a row leaves it once it has been
+ * handled — but a row that vanishes with no trace makes it impossible to say
+ * afterwards what a session actually changed. This is that trace, collapsed by
+ * default because the answer to "what is left" is the question the panel is
+ * open for.
+ */
+function ResolvedSummary({
+  entries,
+  onRestore,
+}: {
+  entries: [string, Resolution][]
+  onRestore: (key: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const fixed = entries.filter(([, e]) => e.how === 'fixed').length
+  const filed = entries.length - fixed
+
+  return (
+    <div className="rounded-md border border-edge bg-surface-1/30 px-2 py-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 text-[10px] text-ink-faint hover:text-ink-muted"
+      >
+        {open ? (
+          <ChevronDown className="size-3" />
+        ) : (
+          <ChevronRight className="size-3" />
+        )}
+        <span>
+          {entries.length} resolved
+          {fixed > 0 && filed > 0 && ` · ${fixed} fixed, ${filed} filed`}
+          {fixed > 0 && filed === 0 && ' · fixed in the draft'}
+          {fixed === 0 && filed > 0 && ' · filed'}
+        </span>
+      </button>
+
+      {open && (
+        <ul className="mt-1 flex flex-col gap-0.5 pl-4">
+          {entries.map(([key, entry]) => (
+            <li key={key} className="flex items-center gap-1.5 text-[10px]">
+              {entry.how === 'fixed' ? (
+                <Wand2 className="size-2.5 shrink-0 text-accent" />
+              ) : (
+                <Bug className="size-2.5 shrink-0 text-ink-faint" />
+              )}
+              <span className="min-w-0 truncate font-mono text-ink-muted">
+                {entry.path}
+              </span>
+              <span className="shrink-0 text-ink-faint">{entry.label}</span>
+              {/* Only a filed row can be put back. A repair is already in the
+                  draft, so "undo" here would restore the row while leaving the
+                  edit in place — the editor's own undo is what reverses it. */}
+              {entry.how === 'filed' && (
+                <button
+                  type="button"
+                  onClick={() => onRestore(key)}
+                  title="Put this back in the list"
+                  className="ml-auto shrink-0 rounded p-0.5 text-ink-faint hover:bg-surface-3 hover:text-accent"
+                >
+                  <Undo2 className="size-2.5" />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }

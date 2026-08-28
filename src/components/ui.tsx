@@ -73,6 +73,23 @@ export function Input({
   )
 }
 
+export function Textarea({
+  className,
+  ...props
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      className={cn(
+        'w-full resize-y rounded-md border border-edge bg-surface-1 px-2 py-1.5 text-xs leading-snug text-ink',
+        'placeholder:text-ink-faint focus:border-accent focus:outline-none',
+        'disabled:text-ink-faint',
+        className,
+      )}
+    />
+  )
+}
+
 export function Select({
   className,
   children,

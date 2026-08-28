@@ -444,6 +444,15 @@ export interface TypeMismatch {
   /** Events that carried one of the `observed` types — the number that matters. */
   mismatchedIn: number
   example: unknown | null
+  /**
+   * The type set that would accept every event in the sample.
+   *
+   * Not `observed`, which holds only the types the declaration forbids: for a
+   * field declared `string` that is null in 7% of events, `observed` is
+   * `["null"]` alone, and redeclaring it as that would fix the 7% by rejecting
+   * the other 93%.
+   */
+  suggested: string[]
 }
 
 export interface EnumDrift {
@@ -492,6 +501,39 @@ export interface Issue {
   example: unknown | null
   /** The validator's own message, when one applies. */
   message: string | null
+  /**
+   * The edit that would clear this issue, where one can be computed.
+   *
+   * Carried on the issue rather than worked out in the panel, so a button
+   * cannot drift from the row it sits on the way one driven by matching the
+   * summary text would.
+   */
+  fix?: Repair
+}
+
+/**
+ * A mechanical edit to a schema that clears one drift issue.
+ *
+ * Applied to the draft and reviewed as a diff — never written straight to AWS.
+ * The operands travel with it so the repair that is applied is the one that was
+ * offered, rather than something re-derived from a path and a kind.
+ */
+export type Repair =
+  /** Redeclare a field as the types real events carry. */
+  | { kind: 'widenType'; types: string[] }
+  /** Admit values the producers already send. */
+  | { kind: 'extendEnum'; values: unknown[] }
+  /** Stop requiring a field that events omit. */
+  | { kind: 'dropRequired' }
+  /** Declare a field that events send and the schema does not describe. */
+  | { kind: 'declareField'; types: string[]; example?: unknown }
+
+/** What a model proposes for an issue the local planner cannot decide. */
+export interface RepairSuggestion {
+  /** Null when the model declined, which is a verdict rather than a failure. */
+  repair: Repair | null
+  rationale: string
+  modelId: string
 }
 
 export interface DriftReport {

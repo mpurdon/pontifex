@@ -1,6 +1,8 @@
 use crate::aws::clients::map_sdk_error;
 use crate::error::{Error, Result};
+use crate::schema::events::Issue;
 use crate::schema::model::{self, EventIdentity};
+use crate::schema::repair::{self, Repair};
 use crate::schema::validate::{self, ValidationReport};
 use crate::settings::BedrockModel;
 use crate::state::AppState;
@@ -324,6 +326,270 @@ pub async fn ai_generate(
     })
 }
 
+/// What a schema version's description may hold.
+///
+/// EventBridge caps `UpdateSchema`'s description, and a write rejected for
+/// length after the diff was reviewed and confirmed is the worst moment to find
+/// out. The model is asked for far less than this; the cap is the backstop.
+const DESCRIPTION_LIMIT: usize = 256;
+
+const REPAIR_PROMPT: &str = r#"You decide how to repair one field in an AWS EventBridge JSON schema, given what real events actually carry.
+
+You are given: the current declaration for the field, what the validator reported, and example values observed in real traffic.
+
+Choose exactly one repair, or none:
+- {"kind":"widenType","types":["string","null"]} — redeclare the field as the types real events carry. Include EVERY type still present in traffic, not only the offending one: a field declared `string` that is null in 7% of events becomes ["string","null"], never ["null"]. Drop a declared type only when the traffic no longer contains it.
+- {"kind":"extendEnum","values":["archived"]} — allow values producers already send.
+- {"kind":"dropRequired"} — stop requiring a field that events omit.
+- {"kind":"declareField","types":["string"]} — declare a field the schema does not describe.
+- null — when no mechanical edit is right, e.g. the events look like a producer bug, or the correct shape cannot be told from the sample.
+
+Types must be JSON type names: null, boolean, integer, number, string, array, object.
+
+Prefer the repair that stops events being rejected while narrowing the schema as little as possible, and prefer none over a guess. Say plainly in the rationale what the edit gives up.
+
+Respond with ONLY this JSON, no prose or fences:
+{"repair": <one of the above, or null>, "rationale": "<one sentence>"}"#;
+
+const SUMMARY_PROMPT: &str = r#"You write the version description for an AWS EventBridge schema registry.
+
+You are given the previous and new version of a schema document. Describe what changed, for an engineer reading the version history months from now who wants to know whether this version is why their events started or stopped validating.
+
+Rules:
+- State the change and its effect on validation, e.g. "homeAddress.country widened to string|null; 3 fields declared; status no longer required."
+- Name the fields. "Various fixes" is worthless in a version history.
+- If nothing but formatting changed, say so.
+- One paragraph, at most 200 characters. No markdown, no preamble, no trailing period-padding to fill space.
+
+Respond with ONLY the description text."#;
+
+/// The repair a model proposes for one issue, with its reasoning.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairSuggestion {
+    /// `None` when the model declined — which is a real answer, not a failure.
+    pub repair: Option<Repair>,
+    pub rationale: String,
+    pub model_id: String,
+}
+
+/// What the model is asked to return, before it is trusted.
+#[derive(Debug, Deserialize)]
+struct ProposedRepair {
+    #[serde(default)]
+    repair: Option<Repair>,
+    #[serde(default)]
+    rationale: String,
+}
+
+/// The JSON type names a repair may name.
+const JSON_TYPES: [&str; 7] = [
+    "null", "boolean", "integer", "number", "string", "array", "object",
+];
+
+/// Reject a proposal that names something that is not a JSON type.
+///
+/// A model that invents `"uuid"` or `"date-time"` produces a schema that
+/// compiles to nothing and silently validates everything — the one failure mode
+/// worth spending a check on.
+fn plausible(repair: &Repair) -> bool {
+    let types = match repair {
+        Repair::WidenType { types } | Repair::DeclareField { types, .. } => types,
+        Repair::ExtendEnum { values } => return !values.is_empty(),
+        Repair::DropRequired => return true,
+    };
+    !types.is_empty() && types.iter().all(|t| JSON_TYPES.contains(&t.as_str()))
+}
+
+/// Prefer a small, fast model for the short classification calls.
+///
+/// These run one per click and answer a bounded question; spending the
+/// schema-authoring model on them is slower and dearer for no better answer.
+/// Falls back to the configured model when nothing cheaper is set up.
+async fn resolve_fast_model(state: &AppState, override_id: Option<String>) -> Result<String> {
+    if let Some(id) = override_id.filter(|s| !s.trim().is_empty()) {
+        return Ok(id);
+    }
+    {
+        let settings = state.settings.read().await;
+        let fast = settings.llm.models.iter().find(|m| {
+            let haystack = format!("{} {}", m.id, m.label).to_lowercase();
+            haystack.contains("haiku")
+        });
+        if let Some(model) = fast {
+            return Ok(model.model_id.clone());
+        }
+    }
+    resolve_model(state, None).await
+}
+
+/// One non-streaming turn. Used by the short calls that have no partial output
+/// worth rendering — a two-line answer does not benefit from a typewriter.
+async fn converse_once(
+    state: &AppState,
+    model_id: &str,
+    system: &str,
+    user: String,
+    max_tokens: i32,
+) -> Result<String> {
+    let cfg = state.llm_config().await?;
+    let client = aws_sdk_bedrockruntime::Client::new(&cfg);
+
+    let message = Message::builder()
+        .role(ConversationRole::User)
+        .content(ContentBlock::Text(user))
+        .build()
+        .map_err(|e| Error::Internal(format!("Could not build Bedrock message: {e}")))?;
+
+    let out = client
+        .converse()
+        .model_id(model_id)
+        .system(SystemContentBlock::Text(system.to_string()))
+        .messages(message)
+        .inference_config(
+            InferenceConfiguration::builder()
+                .max_tokens(max_tokens)
+                .temperature(0.1)
+                .build(),
+        )
+        .send()
+        .await
+        .map_err(map_sdk_error)?;
+
+    let text = out
+        .output()
+        .and_then(|o| o.as_message().ok())
+        .map(|m| {
+            m.content()
+                .iter()
+                .filter_map(|block| block.as_text().ok())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+
+    Ok(text)
+}
+
+/// Ask a model what to do about an issue the deterministic planner cannot decide.
+///
+/// The four mechanical repairs are computed locally and cost nothing; this is
+/// for the rest — a rejected pattern, a bound, a field whose right shape is a
+/// judgement about the sample. The answer comes back as the same `Repair` the
+/// panel already knows how to apply, so an AI-chosen edit and a computed one
+/// travel the identical path and get the same diff review.
+#[tauri::command]
+pub async fn ai_suggest_repair(
+    state: State<'_, AppState>,
+    content: Value,
+    type_name: String,
+    issue: Issue,
+    examples: Vec<Value>,
+    model_id: Option<String>,
+) -> Result<RepairSuggestion> {
+    let model_id = resolve_fast_model(&state, model_id).await?;
+    let document = model::parse_content(&content)?;
+
+    // The declaration as it stands, so the model is reasoning about the real
+    // document rather than the summary's paraphrase of it.
+    let declaration = repair::declaration_at(&document, &type_name, &issue.path)
+        .map(|d| serde_json::to_string_pretty(&d).unwrap_or_default())
+        .unwrap_or_else(|| "(not declared)".to_string());
+
+    let observed: Vec<String> = examples
+        .iter()
+        .take(10)
+        .map(|v| serde_json::to_string(v).unwrap_or_default())
+        .collect();
+
+    let user = format!(
+        "Field: {path}\n\
+         Current declaration:\n{declaration}\n\n\
+         Reported: {summary}\n\
+         Validator message: {message}\n\
+         Affected: {affected} of {sampled} sampled events{rejecting}\n\
+         Observed values: {observed}",
+        path = issue.path,
+        summary = issue.summary,
+        message = issue.message.as_deref().unwrap_or("(none)"),
+        affected = issue.affected,
+        sampled = issue.sampled,
+        rejecting = if issue.rejects {
+            ", which are being rejected today"
+        } else {
+            ""
+        },
+        observed = if observed.is_empty() {
+            "(none captured)".to_string()
+        } else {
+            observed.join(", ")
+        },
+    );
+
+    let text = converse_once(&state, &model_id, REPAIR_PROMPT, user, 512).await?;
+
+    let proposed: ProposedRepair = extract_json(&text)
+        .and_then(|value| serde_json::from_value(value).ok())
+        .ok_or_else(|| {
+            Error::Internal(format!(
+                "The model did not answer with a repair it could apply. It said: {}",
+                text.trim()
+            ))
+        })?;
+
+    // A proposal naming a type that does not exist is dropped rather than
+    // offered: applying it would produce a schema that validates nothing.
+    let repair = proposed.repair.filter(plausible);
+
+    Ok(RepairSuggestion {
+        repair,
+        rationale: proposed.rationale,
+        model_id,
+    })
+}
+
+/// Describe what a draft changed, for the version's description field.
+///
+/// EventBridge stores a description per version, so this is the changelog the
+/// registry already has a place for and nothing has ever written to.
+#[tauri::command]
+pub async fn ai_summarize_changes(
+    state: State<'_, AppState>,
+    before: Option<Value>,
+    after: Value,
+    model_id: Option<String>,
+) -> Result<String> {
+    let model_id = resolve_fast_model(&state, model_id).await?;
+
+    let user = match &before {
+        Some(before) => format!(
+            "Previous version:\n{}\n\nNew version:\n{}",
+            serde_json::to_string_pretty(before).unwrap_or_default(),
+            serde_json::to_string_pretty(&after).unwrap_or_default(),
+        ),
+        // A first version has nothing to diff against, so describe the event.
+        None => format!(
+            "This is the first version of a new schema. Describe what it represents, in one line.\n\n{}",
+            serde_json::to_string_pretty(&after).unwrap_or_default(),
+        ),
+    };
+
+    let text = converse_once(&state, &model_id, SUMMARY_PROMPT, user, 400).await?;
+    Ok(clamp_description(&text))
+}
+
+/// Trim a description to what the registry will accept, on a word boundary.
+fn clamp_description(text: &str) -> String {
+    let trimmed = text.trim().trim_matches('"').trim();
+    if trimmed.chars().count() <= DESCRIPTION_LIMIT {
+        return trimmed.to_string();
+    }
+    let truncated: String = trimmed.chars().take(DESCRIPTION_LIMIT - 1).collect();
+    let cut = truncated.rfind(' ').unwrap_or(truncated.len());
+    format!("{}…", &truncated[..cut])
+}
+
 /// Inference profiles available to the configured LLM profile.
 ///
 /// Lets the user pick a model without hand-copying ARNs, and is the fallback
@@ -430,5 +696,88 @@ mod tests {
         assert!(msg.contains("PacketNotificationAssigned"));
         assert!(msg.contains("milo-medical"));
         assert!(msg.contains("existing schemas from this registry"));
+    }
+
+    #[test]
+    fn a_repair_naming_a_type_that_is_not_a_json_type_is_dropped() {
+        // `uuid` and `date-time` are formats, not types. A schema declaring one
+        // as a type constrains nothing, so it would validate everything and
+        // report the drift as cleared.
+        assert!(!plausible(&Repair::WidenType {
+            types: vec!["uuid".into()]
+        }));
+        assert!(!plausible(&Repair::DeclareField {
+            types: vec!["string".into(), "date-time".into()],
+            example: None,
+        }));
+    }
+
+    #[test]
+    fn a_repair_naming_real_json_types_is_kept() {
+        assert!(plausible(&Repair::WidenType {
+            types: vec!["string".into(), "null".into()]
+        }));
+        assert!(plausible(&Repair::DropRequired));
+    }
+
+    #[test]
+    fn an_empty_repair_is_dropped_rather_than_applied_as_a_no_op() {
+        assert!(!plausible(&Repair::WidenType { types: vec![] }));
+        assert!(!plausible(&Repair::ExtendEnum { values: vec![] }));
+    }
+
+    #[test]
+    fn a_proposal_parses_out_of_the_shape_the_prompt_asks_for() {
+        let parsed: ProposedRepair = extract_json(
+            r#"{"repair": {"kind": "widenType", "types": ["string", "null"]}, "rationale": "7% are null."}"#,
+        )
+        .and_then(|v| serde_json::from_value(v).ok())
+        .expect("should parse");
+
+        assert_eq!(
+            parsed.repair,
+            Some(Repair::WidenType {
+                types: vec!["string".into(), "null".into()]
+            })
+        );
+        assert!(parsed.rationale.contains("null"));
+    }
+
+    #[test]
+    fn declining_to_repair_parses_as_an_answer_rather_than_an_error() {
+        // "None of these is right" is a useful verdict, and must not read as a
+        // malformed response — otherwise the panel reports a model failure for
+        // the one case where the model was being careful.
+        let parsed: ProposedRepair =
+            extract_json(r#"{"repair": null, "rationale": "Looks like a producer bug."}"#)
+                .and_then(|v| serde_json::from_value(v).ok())
+                .expect("should parse");
+
+        assert!(parsed.repair.is_none());
+        assert!(!parsed.rationale.is_empty());
+    }
+
+    #[test]
+    fn a_description_within_the_limit_is_left_alone() {
+        let text = "homeAddress.country widened to string|null.";
+        assert_eq!(clamp_description(text), text);
+    }
+
+    #[test]
+    fn an_over_long_description_is_cut_to_what_the_registry_accepts() {
+        let long = "field ".repeat(200);
+        let clamped = clamp_description(&long);
+
+        assert!(
+            clamped.chars().count() <= DESCRIPTION_LIMIT,
+            "still {} chars",
+            clamped.chars().count()
+        );
+        assert!(clamped.ends_with('…'));
+    }
+
+    #[test]
+    fn a_description_the_model_wrapped_in_quotes_is_unwrapped() {
+        assert_eq!(clamp_description("  \"Declared 3 fields.\"  "), "Declared 3 fields.");
     }
 }

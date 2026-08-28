@@ -105,8 +105,9 @@ export function SchemaDetailPanel({
     return () => clearTimeout(timer)
   }, [text, name, parsed])
 
-  const save = useMutation<unknown, IpcError>({
-    mutationFn: () => ipc.putSchema(name, JSON.parse(text), undefined, envId),
+  const save = useMutation<unknown, IpcError, string | undefined>({
+    mutationFn: (description) =>
+      ipc.putSchema(name, JSON.parse(text), description, envId),
     onSuccess: () => {
       setDraft(null)
       setConfirmingSave(false)
@@ -115,15 +116,16 @@ export function SchemaDetailPanel({
   })
 
   /**
-   * Protected environments get a diff review before the write.
+   * Every write goes through the dialog; only protected ones are gated by it.
    *
-   * Production changes are allowed — they just should not be one keystroke
-   * away, and seeing the actual diff is what makes the confirmation meaningful.
+   * It was protected-only because its job was the acknowledgement, and making
+   * dev ask "are you sure" for every keystroke would have taught everyone to
+   * click through it. It now also carries the version description, which every
+   * version wants and which has nowhere else to be written — so the dialog
+   * opens for all writes and asks for the acknowledgement only where that was
+   * always the point.
    */
-  const requestSave = () => {
-    if (activeEnvironment?.protected) setConfirmingSave(true)
-    else save.mutate()
-  }
+  const requestSave = () => setConfirmingSave(true)
 
   /**
    * Version history, indexed by field.
@@ -423,8 +425,9 @@ export function SchemaDetailPanel({
         isNew={false}
         saving={save.isPending}
         error={save.error}
+        requiresAcknowledgement={activeEnvironment?.protected ?? false}
         onCancel={() => setConfirmingSave(false)}
-        onConfirm={() => save.mutate()}
+        onConfirm={(description) => save.mutate(description)}
       />
 
       <DeleteSchemaDialog

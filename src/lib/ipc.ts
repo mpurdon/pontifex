@@ -35,6 +35,8 @@ import type {
   RegistryReport,
   RegistryReportRequest,
   RegistrySummary,
+  Repair,
+  RepairSuggestion,
   SchemaDetail,
   SchemaHistoryEntry,
   SchemaIssues,
@@ -407,10 +409,40 @@ export const applyFieldSuggestions = (
   fields: FieldObservation[],
 ) => invoke<unknown>('apply_field_suggestions', { content, typeName, fields })
 
+/**
+ * Apply one issue's repair to the draft.
+ *
+ * The repair is sent back exactly as it arrived on the issue, so what is
+ * applied is what the row offered. Returns a patched document for review;
+ * nothing reaches AWS until it is saved like any other edit.
+ */
+export const applyIssueRepair = (
+  content: unknown,
+  typeName: string,
+  path: string,
+  repair: Repair,
+) => invoke<unknown>('apply_issue_repair', { content, typeName, path, repair })
+
 // --- bedrock --------------------------------------------------------------
 
 export const aiGenerate = (request: AiRequest) =>
   invoke<AiResponse>('ai_generate', { request })
+
+/** Asks a small model what to do about an issue with no mechanical repair. */
+export const aiSuggestRepair = (args: {
+  content: unknown
+  typeName: string
+  issue: Issue
+  examples: unknown[]
+  modelId?: string
+}) => invoke<RepairSuggestion>('ai_suggest_repair', args)
+
+/** Describes what a draft changed, for the version's description field. */
+export const aiSummarizeChanges = (
+  before: unknown | null,
+  after: unknown,
+  modelId?: string,
+) => invoke<string>('ai_summarize_changes', { before, after, modelId })
 
 export const listBedrockModels = () =>
   invoke<BedrockModel[]>('list_bedrock_models')

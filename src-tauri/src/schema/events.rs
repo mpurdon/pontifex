@@ -6,6 +6,7 @@
 //! more useful question, "where has the schema drifted from reality".
 
 use crate::error::{Error, Result};
+use crate::schema::repair::Repair;
 use crate::schema::{ajv, openapi};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
@@ -61,6 +62,18 @@ pub struct TypeMismatch {
     /// "200/200 · 100%", which reads as "every event is broken".
     pub mismatched_in: usize,
     pub example: Option<Value>,
+    /// The type set that would accept every event in the sample.
+    ///
+    /// Not `observed`, and the difference is the whole repair. `observed` holds
+    /// only the types the declaration *forbids*: for a field declared `string`
+    /// that is null in 7% of events, it is `["null"]` alone. Redeclaring the
+    /// field as that — which the action line reads as suggesting — would fix the
+    /// 7% by rejecting the other 93%.
+    ///
+    /// So a declared type is kept when the sample still contains it, and dropped
+    /// when it does not: a field declared `object` that is a string in every
+    /// event becomes `string`, not `object | string`.
+    pub suggested: Vec<String>,
 }
 
 /// A declared enum that real traffic exceeded.
@@ -159,6 +172,13 @@ pub struct Issue {
     pub example: Option<Value>,
     /// The validator's own message, when one applies.
     pub message: Option<String>,
+    /// The edit that would clear this, where one can be computed.
+    ///
+    /// Carried on the issue rather than worked out in the panel: the operands
+    /// live here, and a button driven by them cannot drift from the row it sits
+    /// on the way one driven by matching the summary text would.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<Repair>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -557,6 +577,26 @@ pub fn check_events(
                             .find_map(|t| observation.examples.get(t))
                             .cloned()
                             .unwrap_or_else(|| example.clone());
+                        // Keep a declared type only while the sample still
+                        // contains it — `integer` counting as `number`, the
+                        // same equivalence the mismatch itself is judged by.
+                        let mut suggested: Vec<String> = field
+                            .types
+                            .iter()
+                            .filter(|declared| {
+                                types.iter().any(|seen| {
+                                    seen == *declared
+                                        || (declared.as_str() == "number" && seen == "integer")
+                                })
+                            })
+                            .cloned()
+                            .collect();
+                        for seen in &unexpected {
+                            if !suggested.contains(seen) {
+                                suggested.push(seen.clone());
+                            }
+                        }
+
                         drift.type_mismatches.push(TypeMismatch {
                             path: path.clone(),
                             declared: field.types.join(" | "),
@@ -564,6 +604,7 @@ pub fn check_events(
                             seen_in: *seen_in,
                             mismatched_in,
                             example: Some(example),
+                            suggested,
                         });
                     }
                 }
@@ -793,6 +834,15 @@ fn from_failure(
     }
 }
 
+/// Whether a path names a property a repair could edit.
+///
+/// A bare array element is not a named property, and the payload as a whole is
+/// not a field — offering a button for either would only produce an error on
+/// click, which is a worse answer than no button.
+fn repairable(path: &str) -> bool {
+    !path.is_empty() && !path.ends_with("[]")
+}
+
 fn build_issues(
     drift: &DriftReport,
     failures: &[(FailureGroup, FailureClass)],
@@ -849,6 +899,11 @@ fn build_issues(
             rejects,
             example: mismatch.example.clone(),
             message,
+            fix: (repairable(&mismatch.path) && !mismatch.suggested.is_empty()).then(|| {
+                Repair::WidenType {
+                    types: mismatch.suggested.clone(),
+                }
+            }),
         });
     }
 
@@ -889,6 +944,11 @@ fn build_issues(
             rejects,
             example: entry.unexpected.first().cloned(),
             message,
+            fix: (repairable(&entry.path) && !entry.unexpected.is_empty()).then(|| {
+                Repair::ExtendEnum {
+                    values: entry.unexpected.clone(),
+                }
+            }),
         });
     }
 
@@ -917,6 +977,7 @@ fn build_issues(
             rejects,
             example: field.example.clone(),
             message,
+            fix: repairable(&field.path).then_some(Repair::DropRequired),
         });
     }
 
@@ -951,6 +1012,12 @@ fn build_issues(
             rejects,
             example: field.example.clone(),
             message,
+            fix: (repairable(&field.path) && !field.types.is_empty()).then(|| {
+                Repair::DeclareField {
+                    types: field.types.clone(),
+                    example: field.example.clone(),
+                }
+            }),
         });
     }
 
@@ -975,6 +1042,9 @@ fn build_issues(
             rejects: false,
             example: None,
             message: None,
+            // Nothing mechanical to do: whether a field that went quiet is dead
+            // or merely rare is a question about the producer, not the document.
+            fix: None,
         });
     }
 
@@ -1008,6 +1078,9 @@ fn build_issues(
             rejects: true,
             example: failure.example.clone(),
             message: Some(failure.message.clone()),
+            // A pattern, a format, a bound. Which constraint to relax, and to
+            // what, is a judgement the sample does not contain.
+            fix: None,
         });
     }
 
@@ -1046,7 +1119,7 @@ fn render_value(value: &Value) -> String {
 /// `metadata.extra` belongs on whatever type `metadata` refs, not on the root —
 /// so adding an observed field has to walk the same ref graph the analysis did.
 /// Returns the owning schema's JSON Pointer and the leaf property name.
-fn resolve_owner(
+pub(crate) fn resolve_owner(
     document: &Value,
     type_name: &str,
     path: &str,
@@ -1845,5 +1918,118 @@ mod tests {
             "components": { "schemas": { "T": { "type": 42 } } }
         });
         assert!(check_events(&broken, "T", &[]).is_err());
+    }
+
+    /// The repair offered for a wrong type, by path.
+    fn offered(report: &EventCheckReport, path: &str) -> Option<Repair> {
+        report
+            .issues
+            .iter()
+            .find(|i| i.kind == IssueKind::WrongType && i.path == path)
+            .and_then(|i| i.fix.clone())
+    }
+
+    #[test]
+    fn a_partly_null_field_keeps_the_type_the_rest_of_the_traffic_uses() {
+        // The everflowId case. `observed` holds only `null`, and the action line
+        // reads "redeclare as null" — doing that literally would repair 7% of
+        // the traffic by starting to reject the other 93%.
+        let events = vec![
+            json!({ "clientId": "a", "note": "hi" }),
+            json!({ "clientId": "b", "note": "there" }),
+            json!({ "clientId": "c", "note": null }),
+        ];
+        let report = check_events(&document(), "Sync", &events).unwrap();
+
+        assert_eq!(
+            offered(&report, "note"),
+            Some(Repair::WidenType {
+                types: vec!["string".into(), "null".into()]
+            })
+        );
+    }
+
+    #[test]
+    fn a_type_nothing_sends_any_more_is_dropped_rather_than_kept() {
+        // The screenshot case: declared object, every event a string or null.
+        // Keeping `object` in the union would leave the declaration describing
+        // traffic that no longer exists.
+        let events = vec![
+            json!({ "clientId": "a", "metadata": "W_3M43Y" }),
+            json!({ "clientId": "b", "metadata": null }),
+        ];
+        let report = check_events(&document(), "Sync", &events).unwrap();
+
+        let Some(Repair::WidenType { types }) = offered(&report, "metadata") else {
+            panic!("expected a widen repair for metadata, got {:?}", offered(&report, "metadata"));
+        };
+        assert!(!types.contains(&"object".to_string()), "kept a dead type: {types:?}");
+        assert!(types.contains(&"string".to_string()));
+        assert!(types.contains(&"null".to_string()));
+    }
+
+    #[test]
+    fn an_integer_still_satisfies_a_number_declaration_in_the_repair() {
+        let base = json!({
+            "components": {"schemas": {"Sync": {
+                "type": "object",
+                "properties": {"amount": {"type": "number"}}
+            }}}
+        });
+        let events = vec![json!({"amount": 3}), json!({"amount": "3"})];
+        let report = check_events(&base, "Sync", &events).unwrap();
+
+        let Some(Repair::WidenType { types }) = offered(&report, "amount") else {
+            panic!("expected a widen repair for amount");
+        };
+        // `number` covers the integer traffic, so it survives; `string` joins it.
+        assert!(types.contains(&"number".to_string()), "dropped number: {types:?}");
+        assert!(types.contains(&"string".to_string()));
+    }
+
+    #[test]
+    fn an_undeclared_field_carries_the_repair_that_declares_it() {
+        let events = vec![json!({ "clientId": "a", "ringbaId": "W_3M43Y" })];
+        let report = check_events(&document(), "Sync", &events).unwrap();
+
+        let issue = report
+            .issues
+            .iter()
+            .find(|i| i.kind == IssueKind::Undeclared && i.path == "ringbaId")
+            .expect("undeclared issue");
+        assert!(matches!(issue.fix, Some(Repair::DeclareField { .. })));
+    }
+
+    #[test]
+    fn issues_with_no_mechanical_repair_offer_none() {
+        let events = vec![json!({ "clientId": "a" })];
+        let report = check_events(&document(), "Sync", &events).unwrap();
+
+        for issue in &report.issues {
+            if issue.kind == IssueKind::NeverSeen {
+                assert!(issue.fix.is_none(), "{} offered a repair", issue.path);
+            }
+        }
+    }
+
+    #[test]
+    fn a_repair_offered_for_a_wrong_type_actually_clears_it() {
+        // The property worth testing: applying what the row offers makes the
+        // row go away. A repair that does not is worse than no button.
+        let events = vec![
+            json!({ "clientId": "a", "note": "hi" }),
+            json!({ "clientId": "b", "note": null }),
+        ];
+        let report = check_events(&document(), "Sync", &events).unwrap();
+        let fix = offered(&report, "note").expect("a repair for note");
+
+        let repaired = crate::schema::repair::apply(&document(), "Sync", "note", &fix).unwrap();
+        let after = check_events(&repaired, "Sync", &events).unwrap();
+
+        assert_eq!(after.failed, 0, "events still rejected: {:?}", after.failures);
+        assert!(
+            offered(&after, "note").is_none(),
+            "the issue survived its own repair"
+        );
     }
 }
