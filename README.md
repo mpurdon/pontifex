@@ -1,8 +1,8 @@
-# pontifex
+# Pontifex
 
-> **pontifex** (Latin, *pons* "bridge" + *facere* "to make"), *m.* — a
+> **Pontifex** (Latin, *pons* "bridge" + *facere* "to make"), *m.* — a
 > bridge-builder; in Rome, one of the college of priests who kept the rites
-> and the calendar. Their chief was the *pontifex maximus*.
+> and the calendar. Their chief was the *Pontifex maximus*.
 >
 > *Ego a ponte arbitror: nam ab his Sublicius est factus primum ut restitutus
 > saepe.* — "I think it comes from *pons*: for the Sublician bridge was first
@@ -28,7 +28,7 @@ Companion to `~/Projects/trajector/global-event-bus`.
 | **Health**   | Every schema in the registry graded against real traffic in one pass — failing, drifting, healthy, or unseen — plus event types on the bus with no schema at all.                     |
 | **Topology** | What `stacks/busConfiguration.ts` declares versus what is actually deployed, with rules, targets and drift in both directions.                                                       |
 | **Settings** | AWS profiles with live status and SSO sign-in, per-stage environments, registry discovery, Bedrock model catalog.                                                                    |
-| **Developer**| Optional. The application log, where pontifex's files live and how large they are, and cache state — for checking the app itself, not the bus.                                          |
+| **Developer**| Optional. The application log, where Pontifex's files live and how large they are, and cache state — for checking the app itself, not the bus.                                          |
 
 The registry is the source of truth. Local `schemas/` directories are an
 import/export path, not the workflow.
@@ -52,7 +52,7 @@ does not collide with other Tauri projects.
 
 ### First run
 
-pontifex bootstraps itself from your machine:
+Pontifex bootstraps itself from your machine:
 
 - **Environments** — one per stage (`sandbox`, `dev`, `stg`, `prd`) using the
   naming from the SST stack: registry `<stage>-global-registry` in `us-east-2`,
@@ -84,7 +84,7 @@ entirely:
    account and role. The account list is filtered to Global Event Bus accounts
    by default; toggle **All** to see everything the session grants.
 
-pontifex then redeems the session token for that role's credentials on demand.
+Pontifex then redeems the session token for that role's credentials on demand.
 Nothing is written to `~/.aws/config`, and no profile has to exist for an
 account to be reachable — one sign-in covers every account and role.
 
@@ -105,7 +105,7 @@ profile.
 Exported profiles default to a `gm-` prefix and carry a provenance comment:
 
 ```ini
-# written by pontifex — 111111111111 (Global Event Bus Development) as AdministratorAccess
+# written by Pontifex — 111111111111 (Global Event Bus Development) as AdministratorAccess
 [profile gm-dev]
 sso_session = trajector
 sso_account_id = 111111111111
@@ -113,7 +113,7 @@ sso_role_name = AdministratorAccess
 region = us-east-2
 ```
 
-The prefix makes pontifex's profiles easy to spot in a picker, but the comment is
+The prefix makes Pontifex's profiles easy to spot in a picker, but the comment is
 what makes provenance reliable — names get edited, and a prefix tells you
 nothing about which account or role a profile actually grants.
 
@@ -121,15 +121,15 @@ nothing about which account or role a profile actually grants.
 
 Set **Credentials** to *AWS profile* to use an existing profile instead. This
 covers profiles written by an external manager (Leapp, aws-vault, …), which
-appear as `external` in the profile list — pontifex cannot refresh those, so it
+appear as `external` in the profile list — Pontifex cannot refresh those, so it
 points you back to the owning tool rather than offering a sign-in that would do
 nothing.
 
 **Profiles written by a credential manager can vanish.** Leapp and aws-vault
 delete their profile when a session ends, which leaves an environment pointing
-at a name that no longer exists. pontifex detects that and routes you to the fix
+at a name that no longer exists. Pontifex detects that and routes you to the fix
 rather than offering a sign-in that would fail — switching the environment to
-an SSO account avoids the problem entirely, since pontifex re-redeems the session
+an SSO account avoids the problem entirely, since Pontifex re-redeems the session
 token itself.
 
 To declare profiles yourself, one per stage:
@@ -171,7 +171,7 @@ Settings to list what actually exists in the account.
 
 ### Signing in
 
-pontifex runs the OIDC device-code flow itself, opens your browser, and writes
+Pontifex runs the OIDC device-code flow itself, opens your browser, and writes
 the token to `~/.aws/sso/cache` using the same SHA-1 filename scheme the AWS CLI
 uses — so a sign-in here also works in your terminal, and vice versa. Signing in
 to a *session* covers every account it grants; signing in to a *profile* is the
@@ -204,7 +204,7 @@ Production changes are allowed — they just should not be one keystroke away:
 - Both gates are re-checked in Rust, so a UI bug cannot delete by accident.
 - Writes are validated before they are sent. AWS accepts documents that violate
   the EventBridge envelope contract and they then fail silently at
-  event-validation time, so pontifex blocks them up front.
+  event-validation time, so Pontifex blocks them up front.
 
 ## Vocabulary
 
@@ -498,7 +498,7 @@ Notes on a few choices:
 ## Developer mode
 
 **Settings → Developer → Developer mode** adds a Developer tab. It answers "is
-pontifex behaving as expected", which is otherwise only visible from a terminal
+Pontifex behaving as expected", which is otherwise only visible from a terminal
 the app was not started from:
 
 - **Runtime** — version, debug/release build, Tauri version, platform, log level.
@@ -508,7 +508,7 @@ the app was not started from:
 - **Caches** — resolved SDK configs held in memory, cached event types and
   events, with a clear button.
 - **Logs** — the application log, filterable by **category**, level and text,
-  with follow and a line-count selector. pontifex logs to a file in *all* builds,
+  with follow and a line-count selector. Pontifex logs to a file in *all* builds,
   not only debug, so there is a record after the fact.
 - **Copy diagnostics** — versions, paths, sizes and recent errors as one block
   to paste into a bug report.

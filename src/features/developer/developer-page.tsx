@@ -177,7 +177,7 @@ export function DeveloperPage() {
     if (!info.data) return
     const { runtime, storage, caches, logFile } = info.data
     const text = [
-      `pontifex ${runtime.appVersion} (${runtime.profile})`,
+      `Pontifex ${runtime.appVersion} (${runtime.profile})`,
       `tauri ${runtime.tauriVersion} · ${runtime.os}/${runtime.arch} · log level ${runtime.logLevel}`,
       '',
       'Storage:',

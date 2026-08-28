@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "pontifex",
-  "version": "0.1.0",
+  "productName": "Pontifex",
+  "version": "0.1.1",
   "identifier": "dev.codenaked.pontifex",
   "build": {
     "frontendDist": "../dist",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "pontifex — EventBridge schema manager",
+        "title": "Pontifex",
         "width": 1440,
         "height": 900,
         "minWidth": 1000,

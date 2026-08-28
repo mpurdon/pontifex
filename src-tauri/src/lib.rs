@@ -168,7 +168,7 @@ pub fn run() {
 
             linfo!(
                 cat::APP,
-                "pontifex {} starting — {}/{}, log level {level}",
+                "Pontifex {} starting — {}/{}, log level {level}",
                 app.package_info().version,
                 std::env::consts::OS,
                 std::env::consts::ARCH

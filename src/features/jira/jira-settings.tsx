@@ -385,7 +385,7 @@ export function JiraSection({
         */}
         <Note tone="info">
           <span>
-            Atlassian supports only the authorization-code grant, so pontifex needs a
+            Atlassian supports only the authorization-code grant, so Pontifex needs a
             client ID <em>and</em> secret from an app registered in the{' '}
             <a
               className="underline"

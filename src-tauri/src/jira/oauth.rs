@@ -53,7 +53,7 @@ pub fn parse_callback(url: &str) -> Result<CallbackTarget> {
 
     if parsed.scheme() != "http" {
         return Err(Error::Invalid(format!(
-            "The callback URL has to be http on a loopback address — pontifex cannot terminate \
+            "The callback URL has to be http on a loopback address — Pontifex cannot terminate \
              TLS for '{url}'."
         )));
     }
@@ -192,9 +192,9 @@ fn params_from_request_line(line: &str) -> HashMap<String, String> {
 
 fn closing_page(message: &str) -> String {
     let body = format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>pontifex</title>\
+        "<!doctype html><meta charset=\"utf-8\"><title>Pontifex</title>\
          <body style=\"font:14px -apple-system,system-ui,sans-serif;padding:3rem;color:#ddd;background:#1a1a1a\">\
-         <p>{message}</p><p style=\"color:#888\">You can close this tab and go back to pontifex.</p>"
+         <p>{message}</p><p style=\"color:#888\">You can close this tab and go back to Pontifex.</p>"
     );
     format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

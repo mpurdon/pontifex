@@ -295,7 +295,7 @@ function useLoginFor(
   if (!match.sso.applicable) {
     return {
       hint:
-        `Credentials for “${profile}” are managed outside pontifex. Refresh the ` +
+        `Credentials for “${profile}” are managed outside Pontifex. Refresh the ` +
         `session in your credential tool, or switch this environment to an SSO ` +
         `account in Settings.`,
     }

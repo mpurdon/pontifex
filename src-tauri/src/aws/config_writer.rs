@@ -20,7 +20,7 @@ fn render_profile(name: &str, target: &SsoTarget, region: &str) -> String {
         .unwrap_or_default();
 
     format!(
-        "\n# written by pontifex — {account_id}{account} as {role}\n\
+        "\n# written by Pontifex — {account_id}{account} as {role}\n\
          [profile {name}]\n\
          sso_session = {session}\n\
          sso_account_id = {account_id}\n\
@@ -128,12 +128,12 @@ mod tests {
     fn records_where_the_profile_came_from() {
         let block = render_profile("gm-dev", &target(), "us-east-2");
         // Provenance survives a rename, unlike a name prefix.
-        assert!(block.contains("# written by pontifex"));
+        assert!(block.contains("# written by Pontifex"));
         assert!(block.contains("111111111111 (Global Event Bus Development)"));
         assert!(block.contains("as AdministratorAccess"));
         // The comment must precede the section header, or it would be read as
         // part of the previous profile.
-        assert!(block.find("# written by pontifex") < block.find("[profile gm-dev]"));
+        assert!(block.find("# written by Pontifex") < block.find("[profile gm-dev]"));
     }
 
     #[test]
@@ -143,7 +143,7 @@ mod tests {
             ..target()
         };
         let block = render_profile("gm-dev", &anonymous, "us-east-2");
-        assert!(block.contains("# written by pontifex — 111111111111 as"));
+        assert!(block.contains("# written by Pontifex — 111111111111 as"));
     }
 
     #[test]

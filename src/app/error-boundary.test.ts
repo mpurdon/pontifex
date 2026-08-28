@@ -35,7 +35,7 @@ describe('describeError', () => {
 describe('crashReport', () => {
   it('names the scope and the error', () => {
     const report = crashReport('The Schemas screen', new Error('kaboom'))
-    expect(report).toContain('pontifex crashed in The Schemas screen')
+    expect(report).toContain('Pontifex crashed in The Schemas screen')
     expect(report).toContain('error: kaboom')
   })
 

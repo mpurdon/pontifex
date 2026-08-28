@@ -3775,7 +3775,7 @@ dependencies = [
 
 [[package]]
 name = "pontifex"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "aws-config",

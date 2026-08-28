@@ -89,7 +89,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           cd src-tauri/target/release/bundle/macos
-          tar -czf "pontifex_${VERSION}_aarch64.app.tar.gz" pontifex.app
+          tar -czf "pontifex_${VERSION}_aarch64.app.tar.gz" Pontifex.app
           echo "sha=$(shasum -a 256 "pontifex_${VERSION}_aarch64.app.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "file=src-tauri/target/release/bundle/macos/pontifex_${VERSION}_aarch64.app.tar.gz" >> "$GITHUB_OUTPUT"
 
@@ -98,7 +98,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" "${{ steps.pkg.outputs.file }}" \
-            --title "pontifex $GITHUB_REF_NAME" \
+            --title "Pontifex $GITHUB_REF_NAME" \
             --generate-notes
 
       - name: Bump Homebrew tap

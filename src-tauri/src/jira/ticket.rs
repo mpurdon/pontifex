@@ -179,7 +179,7 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
         out.push_str(&format!("{{quote}}{}{{quote}}\n\n", message));
     }
 
-    out.push_str("----\nFiled from pontifex, which sampled real events off the bus and compared them with the registered schema.\n");
+    out.push_str("----\nFiled from Pontifex, which sampled real events off the bus and compared them with the registered schema.\n");
     out
 }
 

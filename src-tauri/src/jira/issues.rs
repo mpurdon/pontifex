@@ -105,7 +105,7 @@ pub async fn comment(client: &JiraClient, key: &str, body: &str) -> Result<()> {
 /// What a re-observation says on an existing ticket.
 pub fn recurrence_comment(affected: usize, sampled: usize, window: &str) -> String {
     format!(
-        "Still happening: {affected} of {sampled} sampled events over {window}, checked from pontifex."
+        "Still happening: {affected} of {sampled} sampled events over {window}, checked from Pontifex."
     )
 }
 
