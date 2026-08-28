@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, RefreshCw, ScrollText } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, RefreshCw, ScrollText } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { LogEvent } from '@/lib/types'
 import {
@@ -139,14 +139,16 @@ export function LogsPage() {
             <Input
               value={source}
               onChange={(e) => setSource(e.target.value)}
-              placeholder="source"
+              placeholder="source (milo*)"
+              title="Exact match, or use * as a leading/trailing wildcard"
               className="w-44"
               spellCheck={false}
             />
             <Input
               value={detailType}
               onChange={(e) => setDetailType(e.target.value)}
-              placeholder="detail-type"
+              placeholder="detail-type (*assigned)"
+              title="Exact match, or use * as a leading/trailing wildcard"
               className="w-52"
               spellCheck={false}
             />
@@ -224,6 +226,7 @@ export function LogsPage() {
                 <th className="w-48 px-2 py-1 font-medium">Source</th>
                 <th className="w-56 px-2 py-1 font-medium">Detail type</th>
                 <th className="px-2 py-1 font-medium">Event id</th>
+                <th className="w-8" />
               </tr>
             </thead>
             <tbody>
@@ -240,6 +243,32 @@ export function LogsPage() {
         )}
       </div>
     </div>
+  )
+}
+
+/** The text a row shows when expanded — and what its copy button copies. */
+function eventText(event: LogEvent): string {
+  return event.event ? JSON.stringify(event.event, null, 2) : event.message
+}
+
+function CopyEventButton({ event }: { event: LogEvent }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      title="Copy event JSON"
+      onClick={(e) => {
+        // The row toggles on click; copying should not expand it.
+        e.stopPropagation()
+        void navigator.clipboard.writeText(eventText(event)).then(() => {
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1500)
+        })
+      }}
+    >
+      {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+    </Button>
   )
 }
 
@@ -281,14 +310,15 @@ function LogRow({
         <td className="truncate px-2 py-1 font-mono text-ink-faint">
           {event.eventId ?? '—'}
         </td>
+        <td className="pr-1 text-right">
+          <CopyEventButton event={event} />
+        </td>
       </tr>
       {expanded && (
         <tr className="border-b border-edge/40 bg-surface-0">
-          <td colSpan={5} className="p-0">
+          <td colSpan={6} className="p-0">
             <pre className="max-h-80 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-ink-muted">
-              {event.event
-                ? JSON.stringify(event.event, null, 2)
-                : event.message}
+              {eventText(event)}
             </pre>
           </td>
         </tr>

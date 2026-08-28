@@ -125,6 +125,10 @@ fn wrap_clauses(clauses: &[String]) -> String {
 }
 
 /// Quote-escape a user-supplied value so it cannot break out of the pattern.
+///
+/// `*` is deliberately left alone: CloudWatch treats it as a wildcard inside a
+/// quoted string value, so `milo*`, `*assigned` and `*Notification*` all work
+/// as leading/trailing/both-ends matches.
 fn escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -260,6 +264,17 @@ mod tests {
         assert_eq!(
             build_filter_pattern(&q).unwrap(),
             r#"{ $.source = "milo-medical" && $.detail-type = "packetNotification-assigned" }"#
+        );
+    }
+
+    #[test]
+    fn wildcards_pass_through_to_cloudwatch() {
+        let mut q = query();
+        q.source = Some("milo*".into());
+        q.detail_type = Some("*Notification*".into());
+        assert_eq!(
+            build_filter_pattern(&q).unwrap(),
+            r#"{ $.source = "milo*" && $.detail-type = "*Notification*" }"#
         );
     }
 
