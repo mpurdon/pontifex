@@ -48,6 +48,11 @@ jobs:
       - name: Frontend tests
         run: pnpm test
 
+      # `tauri::generate_context!()` embeds the frontend at compile time and
+      # refuses to build without `dist/`, so the Rust suite needs it too.
+      - name: Build frontend
+        run: pnpm build
+
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --lib
