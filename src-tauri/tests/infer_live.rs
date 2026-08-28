@@ -8,10 +8,10 @@
 //!   cargo test --test infer_live -- --ignored --nocapture
 
 use aws_config::BehaviorVersion;
-use gebman_lib::schema::events::check_events;
-use gebman_lib::schema::infer::infer_payload_schema;
-use gebman_lib::schema::model::{document_with_detail, EventIdentity};
-use gebman_lib::schema::validate;
+use pontifex_lib::schema::events::check_events;
+use pontifex_lib::schema::infer::infer_payload_schema;
+use pontifex_lib::schema::model::{document_with_detail, EventIdentity};
+use pontifex_lib::schema::validate;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -22,10 +22,10 @@ fn env(name: &str, fallback: &str) -> String {
 #[test]
 #[ignore]
 fn inferred_schemas_validate_the_events_they_came_from() {
-    let profile = env("GEBMAN_LIVE_PROFILE", "global-event-bus");
-    let registry = env("GEBMAN_LIVE_REGISTRY", "prd-global-registry");
-    let log_group = env("GEBMAN_LIVE_LOG_GROUP", "/aws/events/prd-global-events");
-    let region = env("GEBMAN_LIVE_REGION", "us-east-2");
+    let profile = env("PONTIFEX_LIVE_PROFILE", "global-event-bus");
+    let registry = env("PONTIFEX_LIVE_REGISTRY", "prd-global-registry");
+    let log_group = env("PONTIFEX_LIVE_LOG_GROUP", "/aws/events/prd-global-events");
+    let region = env("PONTIFEX_LIVE_REGION", "us-east-2");
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

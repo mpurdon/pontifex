@@ -139,7 +139,7 @@ export function LogsPage() {
             <Input
               value={source}
               onChange={(e) => setSource(e.target.value)}
-              placeholder="source (milo*)"
+              placeholder="source (orders*)"
               title="Exact match, or use * as a leading/trailing wildcard"
               className="w-44"
               spellCheck={false}

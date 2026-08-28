@@ -56,8 +56,8 @@ impl EventIdentity {
     }
 
     /// The PascalCase title EventBridge's own codegen uses for the detail
-    /// object, derived from the detail-type: `packetNotification-assigned`
-    /// becomes `PacketNotificationAssigned`.
+    /// object, derived from the detail-type: `orderNotification-assigned`
+    /// becomes `OrderNotificationAssigned`.
     pub fn detail_title(&self) -> String {
         self.detail_type
             .split(['-', '_', '.', ' '])
@@ -261,7 +261,7 @@ pub fn to_schema_file(
 }
 
 /// The repo names files `<source>_<DetailTitle>.json`, e.g.
-/// `milo-medical_PacketNotificationAssigned.json`.
+/// `orders-api_OrderNotificationAssigned.json`.
 pub fn file_name_for(identity: &EventIdentity) -> String {
     format!("{}_{}.json", identity.source, identity.detail_title())
 }
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn accepts_the_characters_eventbridge_allows() {
-        assert!(invalid_schema_name_chars("milo-medical@packet_v1.2").is_empty());
+        assert!(invalid_schema_name_chars("orders-api@order_v1.2").is_empty());
         assert!(invalid_schema_name_chars("ABC123@xyz").is_empty());
     }
 
@@ -305,31 +305,31 @@ mod tests {
 
     #[test]
     fn sanitizing_leaves_a_valid_name_untouched() {
-        let name = "milo-medical@packetNotification-assigned";
+        let name = "orders-api@orderNotification-assigned";
         assert_eq!(sanitize_schema_name(name), name);
     }
 
     #[test]
     fn round_trips_schema_names() {
-        let id = EventIdentity::from_schema_name("milo-medical@packetNotification-assigned").unwrap();
-        assert_eq!(id.source, "milo-medical");
-        assert_eq!(id.detail_type, "packetNotification-assigned");
-        assert_eq!(id.schema_name(), "milo-medical@packetNotification-assigned");
+        let id = EventIdentity::from_schema_name("orders-api@orderNotification-assigned").unwrap();
+        assert_eq!(id.source, "orders-api");
+        assert_eq!(id.detail_type, "orderNotification-assigned");
+        assert_eq!(id.schema_name(), "orders-api@orderNotification-assigned");
     }
 
     #[test]
     fn derives_detail_title_like_eventbridge_codegen() {
-        let id = EventIdentity::from_schema_name("milo-medical@packetNotification-assigned").unwrap();
-        // Matches the real schema in the repo: title "PacketNotificationAssigned".
-        assert_eq!(id.detail_title(), "PacketNotificationAssigned");
+        let id = EventIdentity::from_schema_name("orders-api@orderNotification-assigned").unwrap();
+        // Matches the real schema in the repo: title "OrderNotificationAssigned".
+        assert_eq!(id.detail_title(), "OrderNotificationAssigned");
     }
 
     #[test]
     fn derives_file_name_like_the_repo() {
-        let id = EventIdentity::from_schema_name("milo-medical@packetNotification-assigned").unwrap();
+        let id = EventIdentity::from_schema_name("orders-api@orderNotification-assigned").unwrap();
         assert_eq!(
             file_name_for(&id),
-            "milo-medical_PacketNotificationAssigned.json"
+            "orders-api_OrderNotificationAssigned.json"
         );
     }
 

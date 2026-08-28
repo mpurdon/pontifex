@@ -36,7 +36,7 @@ impl SsoTarget {
 /// temporary credentials.
 ///
 /// This is exactly what `aws sso login` + a profile would do, minus the
-/// profile: it means gebman can reach any account the session grants without
+/// profile: it means pontifex can reach any account the session grants without
 /// anything being written to `~/.aws/config`.
 ///
 /// Returned credentials are short-lived (typically one hour). The SDK's
@@ -110,7 +110,7 @@ impl SsoRoleProvider {
             secret,
             role.session_token().map(str::to_string),
             expires_at,
-            "GebmanSso",
+            "PontifexSso",
         ))
     }
 }
@@ -136,7 +136,7 @@ pub struct SsoAccount {
     pub matches_event_bus: bool,
 }
 
-/// Heuristic for "this account belongs to the thing gebman manages".
+/// Heuristic for "this account belongs to the thing pontifex manages".
 ///
 /// Matches on the account's display name rather than a hardcoded id list, so
 /// new stages or renamed accounts do not silently drop out of the filter.
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn recognises_event_bus_accounts_by_name() {
-        // The real account names from the trajector SSO directory.
+        // Account names shaped like the real SSO directory.
         for name in [
             "Global Event Bus Production",
             "Global Event Bus Development",
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn ignores_unrelated_accounts() {
-        for name in ["Employee Portal Production", "AIDC Testing", "appeng-dev"] {
+        for name in ["Billing Production", "Data Platform Testing", "platform-dev"] {
             assert!(!looks_like_event_bus_account(Some(name)), "{name}");
         }
         assert!(!looks_like_event_bus_account(None));
@@ -251,7 +251,7 @@ mod tests {
     fn labels_a_target_for_display() {
         let with_name = SsoTarget {
             session: "trajector".into(),
-            account_id: "211125309232".into(),
+            account_id: "111111111111".into(),
             role_name: "AdministratorAccess".into(),
             account_name: Some("Global Event Bus Development".into()),
         };
@@ -264,6 +264,6 @@ mod tests {
             account_name: None,
             ..with_name
         };
-        assert_eq!(without_name.label(), "211125309232 · AdministratorAccess");
+        assert_eq!(without_name.label(), "111111111111 · AdministratorAccess");
     }
 }

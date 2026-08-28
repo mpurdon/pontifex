@@ -5,11 +5,11 @@
 //! validation, on the reasoning that the registry uses `nullable` 560 times and
 //! flagging all of them would drown the reality check.
 //!
-//! That was the wrong call, and it made gebman lie in the direction that costs
+//! That was the wrong call, and it made pontifex lie in the direction that costs
 //! the most. `nullable` is an OpenAPI keyword; Ajv has no implementation of it,
 //! so under `strict: 'log'` the bus logs it once and ignores it forever. A
 //! field declared `{"type": "string", "nullable": true}` therefore **rejects
-//! `null` at the bus** while gebman called it fine. Those 560 uses are not a
+//! `null` at the bus** while pontifex called it fine. Those 560 uses are not a
 //! reason to suppress the finding — they are the size of the problem.
 //!
 //! So the conversion no longer happens on the validation path. What is left is

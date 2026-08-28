@@ -8,7 +8,7 @@ import {
 
 describe('invalidNameChars', () => {
   it('accepts the characters EventBridge allows', () => {
-    expect(invalidNameChars('milo-medical@packet_v1.2')).toEqual([])
+    expect(invalidNameChars('orders-api@order_v1.2')).toEqual([])
     expect(invalidNameChars('ABC123@xyz')).toEqual([])
   })
 
@@ -34,7 +34,7 @@ describe('sanitizeSchemaName', () => {
   })
 
   it('leaves an already-valid name untouched', () => {
-    const name = 'milo-medical@packetNotification-assigned'
+    const name = 'orders-api@orderNotification-assigned'
     expect(sanitizeSchemaName(name)).toBe(name)
   })
 

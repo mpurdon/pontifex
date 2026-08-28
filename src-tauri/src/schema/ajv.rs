@@ -1,9 +1,9 @@
 //! The global-event-bus validator, reproduced.
 //!
-//! gebman exists to manage the schemas that bus enforces, so a verdict here has
+//! pontifex exists to manage the schemas that bus enforces, so a verdict here has
 //! to be the verdict there. "Roughly the same rules" is worse than no tool at
-//! all, because people act on it: a schema gebman calls fine that the bus
-//! rejects turns into a page at 3am, and a schema gebman calls broken that the
+//! all, because people act on it: a schema pontifex calls fine that the bus
+//! rejects turns into a page at 3am, and a schema pontifex calls broken that the
 //! bus accepts turns into a change nobody needed to make.
 //!
 //! What is being matched, from `packages/core/src/schemaValidator.ts`:
@@ -50,7 +50,7 @@ const DRAFT_07_IDS: [&str; 2] = [
 
 /// Build a validator that grades the way the bus grades.
 ///
-/// Prefer this over [`jsonschema::validator_for`] everywhere in gebman: the
+/// Prefer this over [`jsonschema::validator_for`] everywhere in pontifex: the
 /// latter picks 2020-12 and the spec's format set, neither of which the bus
 /// does.
 pub fn validator_for(schema: &Value) -> Result<Validator> {
@@ -148,7 +148,7 @@ static AJV_OPTIONS: LazyLock<jsonschema::ValidationOptions> = LazyLock::new(|| {
     opts
 });
 
-/// How the bus treats one `format`, and therefore how gebman must.
+/// How the bus treats one `format`, and therefore how pontifex must.
 ///
 /// The distinctions used to live in prose beside the table while
 /// `is_known_format` and the numeric-format list re-derived them from
@@ -266,7 +266,7 @@ pub fn asserted_format_names() -> impl Iterator<Item = &'static str> {
         .map(|f| f.name)
 }
 
-/// Does the bus assert this format on numbers, where gebman cannot follow?
+/// Does the bus assert this format on numbers, where pontifex cannot follow?
 ///
 /// Surfaced by the editor so the gap is stated rather than discovered.
 pub fn is_unreproducible_format(name: &str) -> bool {
@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn ignores_the_formats_ajv_does_not_implement() {
         // The crate implements `idn-hostname` and would reject this; Ajv logs
-        // "unknown format" and lets it through, so gebman must too.
+        // "unknown format" and lets it through, so pontifex must too.
         assert!(valid(json!({ "format": "idn-hostname" }), json!("-not a hostname-")));
         assert!(valid(json!({ "format": "iri" }), json!("not an iri")));
     }
@@ -736,7 +736,7 @@ mod tests {
 
     #[test]
     fn hostname_bounds_the_whole_name() {
-        assert!(is_hostname("events.trajectorservices.com"));
+        assert!(is_hostname("events.example.com"));
         assert!(!is_hostname("-leading-hyphen.com"));
         assert!(!is_hostname(&format!("{}.com", "a".repeat(300))));
     }
@@ -766,7 +766,7 @@ mod tests {
 
     #[test]
     fn email_and_uuid_match_ajvs_spelling() {
-        assert!(is_email("matthew.purdon@trajectorservices.com"));
+        assert!(is_email("someone@example.com"));
         assert!(!is_email("no-at-sign"));
         assert!(!is_email("trailing@dot."));
         assert!(is_uuid("urn:uuid:123E4567-E89B-12D3-A456-426614174000"));

@@ -26,8 +26,8 @@ You produce OpenAPI 3.0 documents describing EventBridge events. Every document 
 - `components.schemas.AWSEvent` is the event envelope. It MUST have:
   - "type": "object"
   - "required": ["detail-type","resources","detail","id","source","time","region","version","account"]
-  - "x-amazon-events-source": the event source (e.g. "milo-medical")
-  - "x-amazon-events-detail-type": the event detail-type (e.g. "packetNotification-assigned")
+  - "x-amazon-events-source": the event source (e.g. "orders-api")
+  - "x-amazon-events-detail-type": the event detail-type (e.g. "orderNotification-assigned")
   - "properties" defining detail, account, detail-type, id, region, resources, source, time (format date-time) and version.
   - `properties.detail` MUST be {"$ref": "#/components/schemas/<DetailTitle>"} where <DetailTitle> is the PascalCase form of the detail-type.
 - `components.schemas.<DetailTitle>` describes the event payload. It MUST have "type": "object", "additionalProperties": true, a "properties" map, and a "required" array containing ONLY identifier-like fields (names ending in id, ids, uuid or arn, case-insensitive). If there are no such fields, omit "required" entirely.
@@ -687,14 +687,14 @@ mod tests {
             action: AiAction::Generate,
             prompt: "A packet was assigned to a reviewer".into(),
             schema: None,
-            source: Some("milo-medical".into()),
-            detail_type: Some("packetNotification-assigned".into()),
+            source: Some("orders-api".into()),
+            detail_type: Some("orderNotification-assigned".into()),
             model_id: None,
             examples: vec![json!({"openapi": "3.0.0"})],
         };
         let msg = build_user_message(&req);
-        assert!(msg.contains("PacketNotificationAssigned"));
-        assert!(msg.contains("milo-medical"));
+        assert!(msg.contains("OrderNotificationAssigned"));
+        assert!(msg.contains("orders-api"));
         assert!(msg.contains("existing schemas from this registry"));
     }
 

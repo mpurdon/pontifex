@@ -234,7 +234,7 @@ export function SettingsPage() {
             label="Developer mode"
           />
           <p className="px-1 text-[10px] text-ink-faint">
-            Adds a Developer tab with the application log, where gebman's files
+            Adds a Developer tab with the application log, where pontifex's files
             live and how large they have grown, and its cache state — for
             checking the app itself is behaving, not the event bus.
           </p>
@@ -428,10 +428,10 @@ function ProfilesSection({
     >
       <p className="px-1 pb-2 text-[10px] text-ink-faint">
         Every profile in <span className="font-mono">~/.aws/config</span>, tagged
-        with what gebman uses it for. <span className="text-accent">event bus</span>{' '}
+        with what pontifex uses it for. <span className="text-accent">event bus</span>{' '}
         profiles reach the schema registry and log groups;{' '}
         <span className="text-info">bedrock</span> is used only for AI schema
-        generation. A profile with neither tag is not used by gebman at all.
+        generation. A profile with neither tag is not used by pontifex at all.
       </p>
 
       {isLoading && <Spinner label="Reading ~/.aws/config…" />}

@@ -611,7 +611,7 @@ mod tests {
 
     #[test]
     fn a_complete_sso_selection_resolves() {
-        let env = env_with(Some(target("211125309232", "ReadOnlyAccess")), "");
+        let env = env_with(Some(target("111111111111", "ReadOnlyAccess")), "");
         assert!(matches!(
             env.credential_source().unwrap(),
             CredentialSource::Sso(_)

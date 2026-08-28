@@ -2121,47 +2121,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gebman"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "aws-config",
- "aws-credential-types",
- "aws-sdk-bedrock",
- "aws-sdk-bedrockruntime",
- "aws-sdk-cloudwatchlogs",
- "aws-sdk-eventbridge",
- "aws-sdk-schemas",
- "aws-sdk-sso",
- "aws-sdk-ssooidc",
- "aws-sdk-sts",
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "aws-types",
- "dirs",
- "fancy-regex",
- "futures",
- "hex",
- "jsonschema",
- "keyring",
- "log",
- "regex",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha1",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-log",
- "tauri-plugin-opener",
- "thiserror 2.0.19",
- "time",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3812,6 +3771,47 @@ dependencies = [
  "pin-project-lite",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "pontifex"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-bedrock",
+ "aws-sdk-bedrockruntime",
+ "aws-sdk-cloudwatchlogs",
+ "aws-sdk-eventbridge",
+ "aws-sdk-schemas",
+ "aws-sdk-sso",
+ "aws-sdk-ssooidc",
+ "aws-sdk-sts",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "dirs",
+ "fancy-regex",
+ "futures",
+ "hex",
+ "jsonschema",
+ "keyring",
+ "log",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-log",
+ "tauri-plugin-opener",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

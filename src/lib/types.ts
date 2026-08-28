@@ -24,7 +24,7 @@ export interface IpcError {
 
 /**
  * An account + role reachable through a signed-in SSO session. When set on an
- * environment, gebman resolves credentials itself and no AWS profile is needed.
+ * environment, pontifex resolves credentials itself and no AWS profile is needed.
  */
 export interface SsoTarget {
   session: string
@@ -130,7 +130,7 @@ export interface AllowedValue {
   label: string
 }
 
-/** A field a project makes mandatory and gebman does not already set. */
+/** A field a project makes mandatory and pontifex does not already set. */
 export interface RequiredField {
   fieldId: string
   name: string
@@ -246,7 +246,7 @@ export interface ProfileStatus {
   sourceProfile: string | null
   /**
    * Credentials live in ~/.aws/credentials, written by an external manager
-   * (Leapp, aws-vault, …). gebman cannot refresh them.
+   * (Leapp, aws-vault, …). pontifex cannot refresh them.
    */
   externallyManaged: boolean
   sso: SsoStatus
@@ -791,7 +791,7 @@ export interface AuthorizeUrlParts {
   clientId: string
   callbackUrl: string
   scopes: string[]
-  /** Scopes gebman needs that the app does not have. */
+  /** Scopes pontifex needs that the app does not have. */
   missingScopes: string[]
 }
 

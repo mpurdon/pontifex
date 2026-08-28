@@ -8,7 +8,7 @@
 //! Skipped (not failed) when the repo is not checked out locally, so the test
 //! suite stays green on a machine without it.
 
-use gebman_lib::schema::simplify::simplify_document;
+use pontifex_lib::schema::simplify::simplify_document;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 

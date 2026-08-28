@@ -127,7 +127,7 @@ fn wrap_clauses(clauses: &[String]) -> String {
 /// Quote-escape a user-supplied value so it cannot break out of the pattern.
 ///
 /// `*` is deliberately left alone: CloudWatch treats it as a wildcard inside a
-/// quoted string value, so `milo*`, `*assigned` and `*Notification*` all work
+/// quoted string value, so `orders*`, `*assigned` and `*Notification*` all work
 /// as leading/trailing/both-ends matches.
 fn escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
@@ -247,10 +247,10 @@ mod tests {
     #[test]
     fn compiles_source_filter() {
         let mut q = query();
-        q.source = Some("milo-medical".into());
+        q.source = Some("orders-api".into());
         assert_eq!(
             build_filter_pattern(&q).unwrap(),
-            r#"{ $.source = "milo-medical" }"#
+            r#"{ $.source = "orders-api" }"#
         );
     }
 
@@ -259,29 +259,29 @@ mod tests {
         // Verified against the real API: quoting the hyphenated key as
         // `$."detail-type"` is rejected with `Invalid character(s) in term`.
         let mut q = query();
-        q.source = Some("milo-medical".into());
-        q.detail_type = Some("packetNotification-assigned".into());
+        q.source = Some("orders-api".into());
+        q.detail_type = Some("orderNotification-assigned".into());
         assert_eq!(
             build_filter_pattern(&q).unwrap(),
-            r#"{ $.source = "milo-medical" && $.detail-type = "packetNotification-assigned" }"#
+            r#"{ $.source = "orders-api" && $.detail-type = "orderNotification-assigned" }"#
         );
     }
 
     #[test]
     fn wildcards_pass_through_to_cloudwatch() {
         let mut q = query();
-        q.source = Some("milo*".into());
+        q.source = Some("orders*".into());
         q.detail_type = Some("*Notification*".into());
         assert_eq!(
             build_filter_pattern(&q).unwrap(),
-            r#"{ $.source = "milo*" && $.detail-type = "*Notification*" }"#
+            r#"{ $.source = "orders*" && $.detail-type = "*Notification*" }"#
         );
     }
 
     #[test]
     fn raw_pattern_wins_over_structured_filters() {
         let mut q = query();
-        q.source = Some("milo-medical".into());
+        q.source = Some("orders-api".into());
         q.filter_pattern = Some("{ $.detail.veteranId = \"123\" }".into());
         assert_eq!(
             build_filter_pattern(&q).unwrap(),

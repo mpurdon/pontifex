@@ -12,8 +12,8 @@
 //! second convention meant this test silently skipped for everyone whose
 //! machine the other one already found.
 
-use gebman_lib::schema::model::SchemaFile;
-use gebman_lib::schema::validate;
+use pontifex_lib::schema::model::SchemaFile;
+use pontifex_lib::schema::validate;
 use std::path::PathBuf;
 
 /// Locate the global-event-bus checkout, honouring an env override so CI can

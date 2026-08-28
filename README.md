@@ -1,8 +1,17 @@
-# gebman
+# pontifex
 
-A cross-platform desktop manager for the Trajector **Global Event Bus** —
-browse, edit, generate and register EventBridge schemas, tail event logs, and
-inspect the bus topology, without hand-editing JSON or running one-off scripts.
+> **pontifex** (Latin, *pons* "bridge" + *facere* "to make"), *m.* — a
+> bridge-builder; in Rome, one of the college of priests who kept the rites
+> and the calendar. Their chief was the *pontifex maximus*.
+>
+> *Ego a ponte arbitror: nam ab his Sublicius est factus primum ut restitutus
+> saepe.* — "I think it comes from *pons*: for the Sublician bridge was first
+> built by them, and often restored." Varro, *De Lingua Latina* V.83,
+> weighing in on where the word came from.
+
+A desktop manager for an EventBridge-based event bus — browse, edit, generate
+and register schemas, tail event logs, and inspect the bus topology, without
+hand-editing JSON or running one-off scripts. The bridge-keeper for the bridge.
 
 Built with [Tauri 2](https://tauri.app) (Rust backend, React + TypeScript
 frontend). Every AWS call happens in Rust; the webview never sees credentials.
@@ -19,7 +28,7 @@ Companion to `~/Projects/trajector/global-event-bus`.
 | **Health**   | Every schema in the registry graded against real traffic in one pass — failing, drifting, healthy, or unseen — plus event types on the bus with no schema at all.                     |
 | **Topology** | What `stacks/busConfiguration.ts` declares versus what is actually deployed, with rules, targets and drift in both directions.                                                       |
 | **Settings** | AWS profiles with live status and SSO sign-in, per-stage environments, registry discovery, Bedrock model catalog.                                                                    |
-| **Developer**| Optional. The application log, where gebman's files live and how large they are, and cache state — for checking the app itself, not the bus.                                          |
+| **Developer**| Optional. The application log, where pontifex's files live and how large they are, and cache state — for checking the app itself, not the bus.                                          |
 
 The registry is the source of truth. Local `schemas/` directories are an
 import/export path, not the workflow.
@@ -43,7 +52,7 @@ does not collide with other Tauri projects.
 
 ### First run
 
-gebman bootstraps itself from your machine:
+pontifex bootstraps itself from your machine:
 
 - **Environments** — one per stage (`sandbox`, `dev`, `stg`, `prd`) using the
   naming from the SST stack: registry `<stage>-global-registry` in `us-east-2`,
@@ -75,7 +84,7 @@ entirely:
    account and role. The account list is filtered to Global Event Bus accounts
    by default; toggle **All** to see everything the session grants.
 
-gebman then redeems the session token for that role's credentials on demand.
+pontifex then redeems the session token for that role's credentials on demand.
 Nothing is written to `~/.aws/config`, and no profile has to exist for an
 account to be reachable — one sign-in covers every account and role.
 
@@ -83,7 +92,7 @@ Only an `[sso-session]` block is required:
 
 ```ini
 [sso-session trajector]
-sso_start_url = https://trajector-aws.awsapps.com/start
+sso_start_url = https://YOUR-ORG.awsapps.com/start
 sso_region = us-east-2
 sso_registration_scopes = sso:account:access
 ```
@@ -96,15 +105,15 @@ profile.
 Exported profiles default to a `gm-` prefix and carry a provenance comment:
 
 ```ini
-# written by gebman — 211125309232 (Global Event Bus Development) as AdministratorAccess
+# written by pontifex — 111111111111 (Global Event Bus Development) as AdministratorAccess
 [profile gm-dev]
 sso_session = trajector
-sso_account_id = 211125309232
+sso_account_id = 111111111111
 sso_role_name = AdministratorAccess
 region = us-east-2
 ```
 
-The prefix makes gebman's profiles easy to spot in a picker, but the comment is
+The prefix makes pontifex's profiles easy to spot in a picker, but the comment is
 what makes provenance reliable — names get edited, and a prefix tells you
 nothing about which account or role a profile actually grants.
 
@@ -112,46 +121,46 @@ nothing about which account or role a profile actually grants.
 
 Set **Credentials** to *AWS profile* to use an existing profile instead. This
 covers profiles written by an external manager (Leapp, aws-vault, …), which
-appear as `external` in the profile list — gebman cannot refresh those, so it
+appear as `external` in the profile list — pontifex cannot refresh those, so it
 points you back to the owning tool rather than offering a sign-in that would do
 nothing.
 
 **Profiles written by a credential manager can vanish.** Leapp and aws-vault
 delete their profile when a session ends, which leaves an environment pointing
-at a name that no longer exists. gebman detects that and routes you to the fix
+at a name that no longer exists. pontifex detects that and routes you to the fix
 rather than offering a sign-in that would fail — switching the environment to
-an SSO account avoids the problem entirely, since gebman re-redeems the session
+an SSO account avoids the problem entirely, since pontifex re-redeems the session
 token itself.
 
 To declare profiles yourself, one per stage:
 
 ```ini
 [sso-session trajector]
-sso_start_url = https://trajector-aws.awsapps.com/start
+sso_start_url = https://YOUR-ORG.awsapps.com/start
 sso_region = us-east-2
 sso_registration_scopes = sso:account:access
 
 [profile geb-dev]
 sso_session = trajector
-sso_account_id = 211125309232        # Global Event Bus Development
+sso_account_id = 111111111111        # Global Event Bus Development
 sso_role_name = AdministratorAccess  # whichever role you hold
 region = us-east-2
 
 [profile geb-stg]
 sso_session = trajector
-sso_account_id = 058264105811        # Global Event Bus Staging
+sso_account_id = 222222222222        # Global Event Bus Staging
 sso_role_name = ReadOnlyAccess
 region = us-east-2
 
 [profile geb-prd]
 sso_session = trajector
-sso_account_id = 024848448323        # Global Event Bus Production
+sso_account_id = 333333333333        # Global Event Bus Production
 sso_role_name = ReadOnlyAccess
 region = us-east-2
 
 [profile geb-sandbox]
 sso_session = trajector
-sso_account_id = 851725510220        # Global Event Bus Sandbox
+sso_account_id = 444444444444        # Global Event Bus Sandbox
 sso_role_name = SandboxPowerUserAccess
 region = us-east-2
 ```
@@ -162,7 +171,7 @@ Settings to list what actually exists in the account.
 
 ### Signing in
 
-gebman runs the OIDC device-code flow itself, opens your browser, and writes
+pontifex runs the OIDC device-code flow itself, opens your browser, and writes
 the token to `~/.aws/sso/cache` using the same SHA-1 filename scheme the AWS CLI
 uses — so a sign-in here also works in your terminal, and vice versa. Signing in
 to a *session* covers every account it grants; signing in to a *profile* is the
@@ -195,7 +204,7 @@ Production changes are allowed — they just should not be one keystroke away:
 - Both gates are re-checked in Rust, so a UI bug cannot delete by accident.
 - Writes are validated before they are sent. AWS accepts documents that violate
   the EventBridge envelope contract and they then fail silently at
-  event-validation time, so gebman blocks them up front.
+  event-validation time, so pontifex blocks them up front.
 
 ## Vocabulary
 
@@ -479,7 +488,7 @@ Notes on a few choices:
 - **Monaco is trimmed** to the core editor plus JSON; the default entry point
   bundles every language Monaco ships (~9MB of unused workers).
 - **Settings live in Rust** and are written atomically to the platform config
-  directory (`~/Library/Application Support/com.trajectorservices.gebman` on
+  directory (`~/Library/Application Support/dev.codenaked.pontifex` on
   macOS). Only profile *names* are stored — never credentials.
 - **`.gitignore` anchors `/logs`.** A bare `logs` entry also matches
   `src/features/logs/`, which silently excludes that feature from git *and*
@@ -489,7 +498,7 @@ Notes on a few choices:
 ## Developer mode
 
 **Settings → Developer → Developer mode** adds a Developer tab. It answers "is
-gebman behaving as expected", which is otherwise only visible from a terminal
+pontifex behaving as expected", which is otherwise only visible from a terminal
 the app was not started from:
 
 - **Runtime** — version, debug/release build, Tauri version, platform, log level.
@@ -499,7 +508,7 @@ the app was not started from:
 - **Caches** — resolved SDK configs held in memory, cached event types and
   events, with a clear button.
 - **Logs** — the application log, filterable by **category**, level and text,
-  with follow and a line-count selector. gebman logs to a file in *all* builds,
+  with follow and a line-count selector. pontifex logs to a file in *all* builds,
   not only debug, so there is a record after the fact.
 - **Copy diagnostics** — versions, paths, sizes and recent errors as one block
   to paste into a bug report.

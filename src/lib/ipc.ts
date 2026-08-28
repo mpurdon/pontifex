@@ -342,7 +342,7 @@ export const devInfo = () => invoke<DevInfo>('dev_info')
 export const readAppLogs = (lines?: number) =>
   invoke<string[]>('read_app_logs', { lines })
 
-/** Reveal one of gebman's own directories in the file manager. */
+/** Reveal one of pontifex's own directories in the file manager. */
 export const openAppPath = (id: string) => invoke<void>('open_app_path', { id })
 
 export const clearAppLogs = () => invoke<void>('clear_app_logs')

@@ -1,6 +1,6 @@
 //! Diagnostics for the app itself.
 //!
-//! Everything here answers "is gebman behaving as expected" rather than
+//! Everything here answers "is pontifex behaving as expected" rather than
 //! anything about EventBridge: where its files are, how large they have grown,
 //! what it has logged, and what state its caches are in.
 
@@ -10,7 +10,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
 
-/// A directory gebman writes to, with what it is currently using.
+/// A directory pontifex writes to, with what it is currently using.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageLocation {
@@ -61,7 +61,7 @@ pub struct DevInfo {
 ///
 /// The webview keeps its own cache inside the app cache dir and it grows with
 /// ordinary browsing. Counting it would make "Cache" mean something other than
-/// gebman's own footprint, which is the number this screen exists to show.
+/// pontifex's own footprint, which is the number this screen exists to show.
 const NOT_OURS: &[&str] = &["WebKit", "WebView2", "webkitgtk"];
 
 /// Recursively total a directory's size and file count.
@@ -120,7 +120,7 @@ fn app_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf)> {
 
 /// The file `tauri-plugin-log` writes to, if it exists yet.
 fn log_file(log_dir: &Path) -> Option<PathBuf> {
-    let candidates = ["gebman.log", "app.log"];
+    let candidates = ["pontifex.log", "app.log"];
     for name in candidates {
         let path = log_dir.join(name);
         if path.exists() {
@@ -288,7 +288,7 @@ pub fn log_categories() -> Vec<&'static str> {
     crate::logging::cat::ALL.to_vec()
 }
 
-/// Reveal one of gebman's directories in the system file manager.
+/// Reveal one of pontifex's directories in the system file manager.
 #[tauri::command]
 pub async fn open_app_path(app: AppHandle, id: String) -> Result<()> {
     use tauri_plugin_opener::OpenerExt;
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn measures_files_recursively() {
-        let base = std::env::temp_dir().join(format!("gebman-devtools-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("pontifex-devtools-{}", std::process::id()));
         let nested = base.join("a").join("b");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(base.join("one.txt"), "12345").unwrap();
@@ -372,7 +372,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("gebman-{tag}-{}-{n}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pontifex-{tag}-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -431,7 +431,7 @@ mod tests {
     #[test]
     fn the_webview_cache_is_not_counted_as_ours() {
         // The webview keeps its cache inside our cache dir; counting it would
-        // report someone else's growth as gebman's.
+        // report someone else's growth as pontifex's.
         let dir = temp_dir("webkit");
         std::fs::write(dir.join("event-samples.json"), "12345").unwrap();
         std::fs::create_dir_all(dir.join("WebKit").join("blobs")).unwrap();
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn stops_before_recursing_without_bound() {
         // Depth is capped so a symlink loop cannot hang diagnostics.
-        let base = std::env::temp_dir().join(format!("gebman-depth-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("pontifex-depth-{}", std::process::id()));
         let mut deep = base.clone();
         for i in 0..12 {
             deep = deep.join(format!("d{i}"));

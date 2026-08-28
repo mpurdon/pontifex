@@ -56,7 +56,7 @@ pub struct TicketDraft {
 }
 
 /// Label prefix that marks a ticket as one of ours.
-pub const TICKET_LABEL: &str = "gebman";
+pub const TICKET_LABEL: &str = "pontifex";
 
 /// Strip the code marks the summaries carry.
 ///
@@ -102,7 +102,7 @@ pub fn describe_window(minutes: Option<u64>) -> String {
 /// A value as evidence, written the way JSON would write it.
 ///
 /// Strings keep their quotes: an empty string rendered raw produced a `{code}`
-/// block containing nothing, which reads as "gebman failed to include the
+/// block containing nothing, which reads as "pontifex failed to include the
 /// example" rather than "the value is empty" — and an empty value is usually
 /// the whole bug.
 fn render_example(example: &Value) -> String {
@@ -179,7 +179,7 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
         out.push_str(&format!("{{quote}}{}{{quote}}\n\n", message));
     }
 
-    out.push_str("----\nFiled from gebman, which sampled real events off the bus and compared them with the registered schema.\n");
+    out.push_str("----\nFiled from pontifex, which sampled real events off the bus and compared them with the registered schema.\n");
     out
 }
 
@@ -291,10 +291,10 @@ mod tests {
 
     fn context() -> TicketContext {
         TicketContext {
-            schema_name: "milo-disability@lead-unreached".into(),
+            schema_name: "orders-fulfilment@lead-unreached".into(),
             environment: "prd".into(),
             registry: Some("prd-global-registry".into()),
-            source: "milo-disability".into(),
+            source: "orders-fulfilment".into(),
             detail_type: "lead-unreached".into(),
             log_group: Some("/aws/events/prd-global-events".into()),
             minutes: Some(1440),
@@ -306,7 +306,7 @@ mod tests {
         JiraSettings {
             routes: vec![SourceRoute {
                 id: "1".into(),
-                pattern: "milo-*".into(),
+                pattern: "orders-*".into(),
                 project_key: "IPP".into(),
                 issue_type: None,
                 labels: vec!["producer-bug".into()],
@@ -321,7 +321,7 @@ mod tests {
         let summary = render_summary(&issue(), &context());
         assert_eq!(
             summary,
-            "[milo-disability] callAttemptCount is declared integer but 4% of events send string",
+            "[orders-fulfilment] callAttemptCount is declared integer but 4% of events send string",
         );
         assert!(!summary.contains('`'));
     }
@@ -331,7 +331,7 @@ mod tests {
         let body = render_description(&issue(), &context());
         assert!(body.contains("7 of 200 sampled events"), "{body}");
         assert!(body.contains("the last 1 day(s)"), "{body}");
-        assert!(body.contains("milo-disability"), "{body}");
+        assert!(body.contains("orders-fulfilment"), "{body}");
         assert!(body.contains("lead-unreached"), "{body}");
         assert!(body.contains("/aws/events/prd-global-events"), "{body}");
         assert!(body.contains("LeadUnreached"), "{body}");
@@ -370,18 +370,23 @@ mod tests {
         let draft = draft(&issue(), &context(), &settings()).unwrap();
         assert_eq!(draft.project_key, "IPP");
         assert_eq!(draft.issue_type, "Bug");
-        assert!(draft.labels.contains(&"gebman".to_string()));
-        assert!(draft.labels.contains(&"gebman-prd".to_string()));
+        assert!(draft.labels.contains(&"pontifex".to_string()));
+        assert!(draft.labels.contains(&"pontifex-prd".to_string()));
         assert!(draft.labels.contains(&"producer-bug".to_string()));
-        assert!(draft.labels.iter().any(|l| l.starts_with("gebman-") && l.len() == 19));
-        assert!(draft.routed_by.contains("milo-*"), "{}", draft.routed_by);
+        // `<label>-<12 hex chars>` — the fingerprint label.
+        let fingerprint_len = TICKET_LABEL.len() + 1 + 12;
+        assert!(draft
+            .labels
+            .iter()
+            .any(|l| l.starts_with("pontifex-") && l.len() == fingerprint_len));
+        assert!(draft.routed_by.contains("orders-*"), "{}", draft.routed_by);
     }
 
     #[test]
     fn refuses_to_guess_when_nothing_routes_the_source() {
         let unrouted = JiraSettings::default();
         let error = draft(&issue(), &context(), &unrouted).unwrap_err();
-        assert!(error.to_string().contains("milo-disability"), "{error}");
+        assert!(error.to_string().contains("orders-fulfilment"), "{error}");
         assert!(error.to_string().contains("Settings → Jira"), "{error}");
     }
 
@@ -413,7 +418,7 @@ mod tests {
         let fields = to_fields(&draft);
         assert_eq!(fields["fields"]["project"]["key"], "IPP");
         assert_eq!(fields["fields"]["issuetype"]["name"], "Bug");
-        assert!(fields["fields"]["summary"].as_str().unwrap().starts_with("[milo-disability]"));
+        assert!(fields["fields"]["summary"].as_str().unwrap().starts_with("[orders-fulfilment]"));
         assert!(fields["fields"]["assignee"].is_null());
     }
 }

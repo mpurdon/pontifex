@@ -1,15 +1,15 @@
 [package]
-name = "gebman"
+name = "pontifex"
 version = "0.1.0"
 description = "Desktop manager for the Trajector Global Event Bus"
-authors = ["Matthew Purdon <matthew.purdon@trajectorservices.com>"]
+authors = ["Matthew Purdon <matthew@codenaked.org>"]
 license = "MIT"
 repository = ""
 edition = "2021"
 rust-version = "1.82"
 
 [lib]
-name = "gebman_lib"
+name = "pontifex_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

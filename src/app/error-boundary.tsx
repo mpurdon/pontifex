@@ -39,7 +39,7 @@ export function crashReport(
 ): string {
   const { message, stack } = describeError(error)
   return [
-    `gebman crashed in ${scope}`,
+    `pontifex crashed in ${scope}`,
     `error: ${message}`,
     stack ? `\nstack:\n${stack}` : '',
     componentStack ? `\ncomponents:${componentStack}` : '',

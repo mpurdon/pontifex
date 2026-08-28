@@ -105,7 +105,7 @@ pub async fn comment(client: &JiraClient, key: &str, body: &str) -> Result<()> {
 /// What a re-observation says on an existing ticket.
 pub fn recurrence_comment(affected: usize, sampled: usize, window: &str) -> String {
     format!(
-        "Still happening: {affected} of {sampled} sampled events over {window}, checked from gebman."
+        "Still happening: {affected} of {sampled} sampled events over {window}, checked from pontifex."
     )
 }
 
@@ -195,7 +195,7 @@ pub struct AllowedValue {
     pub label: String,
 }
 
-/// A field this project demands and gebman does not already set.
+/// A field this project demands and pontifex does not already set.
 ///
 /// Projects are free to make anything mandatory — "Discovery Environment",
 /// "Team", a component — and a create call that omits one is rejected with a
@@ -218,7 +218,7 @@ pub struct RequiredField {
     pub allowed_values: Vec<AllowedValue>,
 }
 
-/// Fields gebman already fills, or Jira fills itself.
+/// Fields pontifex already fills, or Jira fills itself.
 const HANDLED_FIELDS: &[&str] = &[
     "summary",
     "description",
@@ -330,19 +330,19 @@ mod tests {
     #[test]
     fn a_ticket_key_becomes_a_link_to_the_site_it_lives_on() {
         assert_eq!(
-            browse_url(Some("https://trajector.atlassian.net/"), "IPP-42"),
-            "https://trajector.atlassian.net/browse/IPP-42",
+            browse_url(Some("https://example.atlassian.net/"), "PROJ-42"),
+            "https://example.atlassian.net/browse/PROJ-42",
         );
     }
 
     #[test]
     fn without_a_site_the_key_stands_alone_rather_than_linking_somewhere_wrong() {
-        assert_eq!(browse_url(None, "IPP-42"), "IPP-42");
+        assert_eq!(browse_url(None, "PROJ-42"), "PROJ-42");
     }
 
     #[test]
     fn jql_literals_survive_a_quote() {
-        assert_eq!(jql_quote("gebman-abc123"), "\"gebman-abc123\"");
+        assert_eq!(jql_quote("pontifex-abc123"), "\"pontifex-abc123\"");
         assert_eq!(jql_quote("od\"d"), "\"od\\\"d\"");
     }
 
@@ -377,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn does_not_ask_for_fields_gebman_already_fills() {
+    fn does_not_ask_for_fields_pontifex_already_fills() {
         let page = serde_json::json!({
             "values": [
                 { "fieldId": "summary", "name": "Summary", "required": true,

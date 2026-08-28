@@ -476,7 +476,7 @@ mod tests {
         // an `@`, so the type splits on the last one.
         for (source, detail) in [
             ("Atomic Forms", "CASE_FILED"),
-            ("milo-disability", "lead-unreached"),
+            ("orders-fulfilment", "lead-unreached"),
             ("weird@source", "thing-happened"),
         ] {
             let key = cache_key("prd", "/aws/events/prd-global-events", source, detail);
@@ -523,7 +523,7 @@ mod tests {
         impl Dir {
             pub fn new() -> Self {
                 let base = std::env::temp_dir().join(format!(
-                    "gebman-cache-test-{}-{}",
+                    "pontifex-cache-test-{}-{}",
                     std::process::id(),
                     COUNTER.fetch_add(1, Ordering::SeqCst),
                 ));

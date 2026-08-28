@@ -6,12 +6,12 @@ describe('suggestPatterns', () => {
     const options = suggestPatterns([
       'billing-invoices',
       'billing-ledger',
-      'milo-disability',
+      'orders-fulfilment',
     ])
     expect(options).toContain('billing-*')
-    // One source is not a family — `milo-*` would just be a slower way of
+    // One source is not a family — `orders-*` would just be a slower way of
     // writing the name that is already on the list.
-    expect(options).not.toContain('milo-*')
+    expect(options).not.toContain('orders-*')
   })
 
   it('keeps every source, so an exact rule is one pick away', () => {

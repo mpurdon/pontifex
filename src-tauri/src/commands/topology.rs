@@ -381,18 +381,18 @@ const busConfig: BusConfig = {
     sandbox: [
       {
         sourceBusName: 'sandbox-bus-1',
-        sourceArn: 'arn:aws:events:us-east-2:745266787460:event-bus/sandbox-bus-1',
+        sourceArn: 'arn:aws:events:us-east-2:444444444444:event-bus/sandbox-bus-1',
       },
     ],
     dev: [
       {
-        sourceBusName: 'dev-disability-api-event-bus',
+        sourceBusName: 'dev-orders-api-event-bus',
         sourceArn:
-          'arn:aws:events:us-east-2:362462262482:event-bus/dev-disability-api-event-bus',
+          'arn:aws:events:us-east-2:111111111111:event-bus/dev-orders-api-event-bus',
       },
       {
-        sourceBusName: 'milo-bus',
-        sourceArn: 'arn:aws:events:us-east-2:085753910160:event-bus/milo-bus',
+        sourceBusName: 'billing-bus',
+        sourceArn: 'arn:aws:events:us-east-2:555555555555:event-bus/billing-bus',
       },
     ],
     stg: [],
@@ -421,8 +421,8 @@ const busConfig: BusConfig = {
             .filter(|b| b.stage == "dev" && b.category == "trajector")
             .collect();
         assert_eq!(dev_trajector.len(), 2);
-        assert_eq!(dev_trajector[0].source_bus_name, "dev-disability-api-event-bus");
-        assert_eq!(dev_trajector[1].source_bus_name, "milo-bus");
+        assert_eq!(dev_trajector[0].source_bus_name, "dev-orders-api-event-bus");
+        assert_eq!(dev_trajector[1].source_bus_name, "billing-bus");
 
         assert_eq!(
             buses.iter().filter(|b| b.stage == "sandbox").count(),
@@ -442,23 +442,23 @@ const busConfig: BusConfig = {
         let buses = parse_bus_configuration(SAMPLE);
         let wrapped = buses
             .iter()
-            .find(|b| b.source_bus_name == "dev-disability-api-event-bus")
+            .find(|b| b.source_bus_name == "dev-orders-api-event-bus")
             .expect("wrapped entry should parse");
         assert_eq!(
             wrapped.source_arn,
-            "arn:aws:events:us-east-2:362462262482:event-bus/dev-disability-api-event-bus"
+            "arn:aws:events:us-east-2:111111111111:event-bus/dev-orders-api-event-bus"
         );
     }
 
     #[test]
     fn extracts_account_and_region_from_arns() {
         let buses = parse_bus_configuration(SAMPLE);
-        let milo = buses
+        let billing = buses
             .iter()
-            .find(|b| b.source_bus_name == "milo-bus")
+            .find(|b| b.source_bus_name == "billing-bus")
             .unwrap();
-        assert_eq!(milo.account_id.as_deref(), Some("085753910160"));
-        assert_eq!(milo.region.as_deref(), Some("us-east-2"));
+        assert_eq!(billing.account_id.as_deref(), Some("555555555555"));
+        assert_eq!(billing.region.as_deref(), Some("us-east-2"));
     }
 
     #[test]

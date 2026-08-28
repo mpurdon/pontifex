@@ -15,7 +15,7 @@ pub enum Severity {
     Warning,
 }
 
-/// A repair gebman can apply to the whole document to clear a finding.
+/// A repair pontifex can apply to the whole document to clear a finding.
 ///
 /// Carried on the finding rather than inferred by the editor: the alternative
 /// was matching the message prose, which makes rewording a sentence silently
@@ -384,7 +384,7 @@ impl Parity {
             Severity::Warning,
             &self.numeric_formats,
             None,
-            "The bus asserts this format against numbers, and gebman's validator only ever \
+            "The bus asserts this format against numbers, and pontifex's validator only ever \
              sees strings — so events are graded here without it. The check is real in \
              production; this report just cannot reproduce it.",
         );
@@ -785,12 +785,12 @@ mod tests {
     fn a_registrable_name_produces_no_name_finding() {
         let doc = super::super::model::document_with_detail(
             &super::EventIdentity {
-                source: "milo-medical".into(),
-                detail_type: "packet-assigned".into(),
+                source: "orders-api".into(),
+                detail_type: "order-assigned".into(),
             },
             serde_json::json!({ "type": "object", "additionalProperties": true }),
         );
-        let report = super::validate(&doc, Some("milo-medical@packet-assigned"));
+        let report = super::validate(&doc, Some("orders-api@order-assigned"));
         assert!(
             !report.findings.iter().any(|f| f.message.contains("EventBridge will reject")),
             "valid names must not be flagged"
@@ -947,7 +947,7 @@ mod tests {
         let report = validate(&doc, None);
 
         // A warning, not an error: the document is legal and registrable, and
-        // most of the registry is written this way. Blocking would make gebman
+        // most of the registry is written this way. Blocking would make pontifex
         // unable to open the schemas it exists to manage.
         assert!(report.valid, "findings: {:?}", report.findings);
         let message = message_matching(&report, "nullable").expect("a nullable finding");

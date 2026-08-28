@@ -74,7 +74,7 @@ export function NewSchemaDialog({
 
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-4">
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Source" hint="kebab-case service, e.g. milo-medical">
+              <Field label="Source" hint="kebab-case service, e.g. orders-api">
                 <Input
                   value={source}
                   onChange={(e) => setSource(e.target.value)}

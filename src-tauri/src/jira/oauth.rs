@@ -53,7 +53,7 @@ pub fn parse_callback(url: &str) -> Result<CallbackTarget> {
 
     if parsed.scheme() != "http" {
         return Err(Error::Invalid(format!(
-            "The callback URL has to be http on a loopback address — gebman cannot terminate \
+            "The callback URL has to be http on a loopback address — pontifex cannot terminate \
              TLS for '{url}'."
         )));
     }
@@ -91,7 +91,7 @@ pub struct AuthorizeUrlParts {
     pub callback_url: String,
     /// Scopes the app is configured with, in the order the console listed them.
     pub scopes: Vec<String>,
-    /// Scopes gebman needs that the app does not have.
+    /// Scopes pontifex needs that the app does not have.
     ///
     /// Worth catching here: a missing scope is otherwise a consent-screen
     /// error much later, phrased in Atlassian's terms rather than in terms of
@@ -192,9 +192,9 @@ fn params_from_request_line(line: &str) -> HashMap<String, String> {
 
 fn closing_page(message: &str) -> String {
     let body = format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>gebman</title>\
+        "<!doctype html><meta charset=\"utf-8\"><title>pontifex</title>\
          <body style=\"font:14px -apple-system,system-ui,sans-serif;padding:3rem;color:#ddd;background:#1a1a1a\">\
-         <p>{message}</p><p style=\"color:#888\">You can close this tab and go back to gebman.</p>"
+         <p>{message}</p><p style=\"color:#888\">You can close this tab and go back to pontifex.</p>"
     );
     format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -474,7 +474,7 @@ mod tests {
     fn reads_a_url_copied_verbatim_from_the_console() {
         // Byte-for-byte what the generator produces, placeholder and all: the
         // `state` it hands you is the literal `${YOUR_USER_BOUND_VALUE}`, with
-        // unencoded braces that a stricter parser would refuse. gebman
+        // unencoded braces that a stricter parser would refuse. pontifex
         // substitutes its own state anyway.
         let parts = parse_authorize_url(
             "https://auth.atlassian.com/authorize?audience=api.atlassian.com\

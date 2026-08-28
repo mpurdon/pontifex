@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "gebman",
+  "productName": "pontifex",
   "version": "0.1.0",
-  "identifier": "com.trajectorservices.gebman",
+  "identifier": "dev.codenaked.pontifex",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1428",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "gebman — Global Event Bus Manager",
+        "title": "pontifex — EventBridge schema manager",
         "width": 1440,
         "height": 900,
         "minWidth": 1000,

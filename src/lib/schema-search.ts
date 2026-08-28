@@ -8,8 +8,8 @@
  * somewhere in it. Results looked arbitrary, which is worse than too few.
  *
  * Substring matching is predictable, and splitting on whitespace keeps the
- * abbreviation case working — `milo pack` still finds
- * `milo-medical@packetNotification-assigned` — without the false positives.
+ * abbreviation case working — `orders order` still finds
+ * `orders-api@orderNotification-assigned` — without the false positives.
  */
 
 export interface Searchable {

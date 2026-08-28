@@ -9,7 +9,7 @@ use std::path::PathBuf;
 /// stays in step if its start URL ever changes.
 ///
 /// A provenance comment is written above the block. A `gm-` name prefix helps
-/// you spot gebman's profiles in a picker, but names get edited and prefixes
+/// you spot pontifex's profiles in a picker, but names get edited and prefixes
 /// collide — the comment is what makes "who wrote this, and is it safe to
 /// delete" answerable even after a rename.
 fn render_profile(name: &str, target: &SsoTarget, region: &str) -> String {
@@ -20,7 +20,7 @@ fn render_profile(name: &str, target: &SsoTarget, region: &str) -> String {
         .unwrap_or_default();
 
     format!(
-        "\n# written by gebman — {account_id}{account} as {role}\n\
+        "\n# written by pontifex — {account_id}{account} as {role}\n\
          [profile {name}]\n\
          sso_session = {session}\n\
          sso_account_id = {account_id}\n\
@@ -47,7 +47,7 @@ fn profile_exists(content: &str, name: &str) -> bool {
 
 /// Append a profile for an SSO target to `~/.aws/config`.
 ///
-/// Only ever called from an explicit "Export as AWS profile" action — gebman
+/// Only ever called from an explicit "Export as AWS profile" action — pontifex
 /// resolves credentials in-app and never needs this itself. Appends rather than
 /// rewrites, so a config managed by another tool is left intact, and refuses to
 /// clobber an existing profile of the same name.
@@ -92,7 +92,7 @@ pub fn export_sso_profile(name: &str, target: &SsoTarget, region: &str) -> Resul
 
     // Write-then-rename: a crash mid-write must not truncate a file other
     // tools depend on.
-    let tmp = path.with_extension("gebman-tmp");
+    let tmp = path.with_extension("pontifex-tmp");
     std::fs::write(&tmp, &updated)?;
     std::fs::rename(&tmp, &path)?;
 
@@ -106,7 +106,7 @@ mod tests {
     fn target() -> SsoTarget {
         SsoTarget {
             session: "trajector".into(),
-            account_id: "211125309232".into(),
+            account_id: "111111111111".into(),
             role_name: "AdministratorAccess".into(),
             account_name: Some("Global Event Bus Development".into()),
         }
@@ -117,7 +117,7 @@ mod tests {
         let block = render_profile("gm-dev", &target(), "us-east-2");
         assert!(block.contains("[profile gm-dev]"));
         assert!(block.contains("sso_session = trajector"));
-        assert!(block.contains("sso_account_id = 211125309232"));
+        assert!(block.contains("sso_account_id = 111111111111"));
         assert!(block.contains("sso_role_name = AdministratorAccess"));
         assert!(block.contains("region = us-east-2"));
         // Inline SSO keys would duplicate the session's config.
@@ -128,12 +128,12 @@ mod tests {
     fn records_where_the_profile_came_from() {
         let block = render_profile("gm-dev", &target(), "us-east-2");
         // Provenance survives a rename, unlike a name prefix.
-        assert!(block.contains("# written by gebman"));
-        assert!(block.contains("211125309232 (Global Event Bus Development)"));
+        assert!(block.contains("# written by pontifex"));
+        assert!(block.contains("111111111111 (Global Event Bus Development)"));
         assert!(block.contains("as AdministratorAccess"));
         // The comment must precede the section header, or it would be read as
         // part of the previous profile.
-        assert!(block.find("# written by gebman") < block.find("[profile gm-dev]"));
+        assert!(block.find("# written by pontifex") < block.find("[profile gm-dev]"));
     }
 
     #[test]
@@ -143,7 +143,7 @@ mod tests {
             ..target()
         };
         let block = render_profile("gm-dev", &anonymous, "us-east-2");
-        assert!(block.contains("# written by gebman — 211125309232 as"));
+        assert!(block.contains("# written by pontifex — 111111111111 as"));
     }
 
     #[test]

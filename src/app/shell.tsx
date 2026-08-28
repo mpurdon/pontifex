@@ -137,7 +137,7 @@ export function Shell() {
     <div className="flex h-full flex-col bg-surface-0">
       <header className="flex h-11 shrink-0 items-center gap-3 border-b border-edge bg-surface-1 px-3">
         <span className="text-sm font-semibold tracking-tight text-accent">
-          gebman
+          pontifex
         </span>
 
         <nav className="flex items-center gap-0.5">

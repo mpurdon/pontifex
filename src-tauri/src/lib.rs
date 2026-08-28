@@ -153,7 +153,7 @@ pub fn run() {
                     .targets([
                         tauri_plugin_log::Target::new(
                             tauri_plugin_log::TargetKind::LogDir {
-                                file_name: Some("gebman".into()),
+                                file_name: Some("pontifex".into()),
                             },
                         ),
                         tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
@@ -168,7 +168,7 @@ pub fn run() {
 
             linfo!(
                 cat::APP,
-                "gebman {} starting — {}/{}, log level {level}",
+                "pontifex {} starting — {}/{}, log level {level}",
                 app.package_info().version,
                 std::env::consts::OS,
                 std::env::consts::ARCH

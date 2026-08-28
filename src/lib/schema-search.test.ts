@@ -21,8 +21,8 @@ const REGISTRY = [
   'billing-medical@CelebrationCallAssigned',
   'billing-medical@update-client',
   'callbot@va-pay-increase-reported',
-  'clientPortal-disability@clientPortal-connectionsView',
-  'milo-medical@packetNotification-assigned',
+  'clientPortal-billing@clientPortal-connectionsView',
+  'orders-api@orderNotification-assigned',
 ].map(schema)
 
 describe('matchesQuery', () => {
@@ -47,9 +47,9 @@ describe('matchesQuery', () => {
 
   it('treats whitespace as separate terms that must all match', () => {
     // Keeps the abbreviation case working without the false positives.
-    const s = schema('milo-medical@packetNotification-assigned')
-    expect(matchesQuery(s, 'milo pack')).toBe(true)
-    expect(matchesQuery(s, 'milo nope')).toBe(false)
+    const s = schema('orders-api@orderNotification-assigned')
+    expect(matchesQuery(s, 'orders order')).toBe(true)
+    expect(matchesQuery(s, 'orders nope')).toBe(false)
   })
 
   it('matches on the source or the detail type', () => {

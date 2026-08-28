@@ -9,13 +9,13 @@ use time::OffsetDateTime;
 
 /// The client name we register with AWS SSO OIDC. Shows up in the SSO portal's
 /// device-authorization screen, so make it recognisable.
-const CLIENT_NAME: &str = "gebman";
+const CLIENT_NAME: &str = "pontifex";
 const CLIENT_TYPE: &str = "public";
 const DEFAULT_SCOPE: &str = "sso:account:access";
 
 /// Shape of the AWS CLI v2 SSO token cache file.
 ///
-/// We read *and* write this format so a login in either gebman or the CLI is
+/// We read *and* write this format so a login in either pontifex or the CLI is
 /// visible to the other. Field names are the CLI's, which is why they are
 /// camelCase and why `startUrl`/`region` are included even though we do not
 /// strictly need them — the CLI validates them on read.

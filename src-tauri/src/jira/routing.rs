@@ -124,14 +124,14 @@ mod tests {
     #[test]
     fn matches_prefixes_suffixes_and_exact_names() {
         assert!(matches("billing*", "billing-invoices"));
-        assert!(matches("*-disability", "milo-disability"));
-        assert!(matches("milo-disability", "milo-disability"));
+        assert!(matches("*-fulfilment", "orders-fulfilment"));
+        assert!(matches("orders-fulfilment", "orders-fulfilment"));
         assert!(matches("*", "anything"));
         assert!(matches("ais-*-legal", "ais-outreach-legal"));
 
         assert!(!matches("billing*", "prebilling"));
-        assert!(!matches("milo-disability", "milo-disability-v2"));
-        assert!(!matches("", "milo"));
+        assert!(!matches("orders-fulfilment", "orders-fulfilment-v2"));
+        assert!(!matches("", "orders"));
     }
 
     #[test]
@@ -155,13 +155,13 @@ mod tests {
             "INV",
         );
         assert_eq!(route_for(&settings, "billing-ledger").unwrap().project_key, "IPP");
-        assert_eq!(route_for(&settings, "milo-disability").unwrap().project_key, "CATCHALL");
+        assert_eq!(route_for(&settings, "orders-fulfilment").unwrap().project_key, "CATCHALL");
     }
 
     #[test]
     fn falls_back_to_the_default_project_and_says_so() {
         let settings = settings(vec![route("billing*", "IPP")], Some("TRIAGE"));
-        let routed = route_for(&settings, "milo-disability").unwrap();
+        let routed = route_for(&settings, "orders-fulfilment").unwrap();
         assert_eq!(routed.project_key, "TRIAGE");
         assert!(routed.reason.contains("no rule matches"), "{}", routed.reason);
     }
@@ -169,14 +169,14 @@ mod tests {
     #[test]
     fn without_a_rule_or_a_default_there_is_nowhere_to_file() {
         let settings = settings(vec![route("billing*", "IPP")], None);
-        assert!(route_for(&settings, "milo-disability").is_none());
+        assert!(route_for(&settings, "orders-fulfilment").is_none());
     }
 
     #[test]
     fn a_rule_with_no_project_key_is_ignored_rather_than_routed_to_nothing() {
-        let settings = settings(vec![route("milo*", "  ")], Some("TRIAGE"));
+        let settings = settings(vec![route("orders*", "  ")], Some("TRIAGE"));
         assert_eq!(
-            route_for(&settings, "milo-disability").unwrap().project_key,
+            route_for(&settings, "orders-fulfilment").unwrap().project_key,
             "TRIAGE",
         );
     }

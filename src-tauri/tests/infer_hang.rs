@@ -6,7 +6,7 @@
 //! inside a `#[tauri::command]` leaves the IPC promise pending forever, which
 //! looks exactly like a hang.
 
-use gebman_lib::schema::{infer, model, validate};
+use pontifex_lib::schema::{infer, model, validate};
 use serde_json::Value;
 use std::time::Instant;
 

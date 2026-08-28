@@ -255,7 +255,7 @@ export function ReportPage() {
    * Types whose events carry an identity the registry cannot spell.
    *
    * Not a grading problem — these are matched and graded fine here, because
-   * gebman tries the sanitized spelling too. It is a warning about everything
+   * pontifex tries the sanitized spelling too. It is a warning about everything
    * downstream that does not.
    */
   const mismatched = useMemo(

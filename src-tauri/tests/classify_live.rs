@@ -9,19 +9,19 @@
 //!
 //! Skipped when no such profile exists locally.
 
-use gebman_lib::aws::clients::caller_identity;
-use gebman_lib::error::Error;
+use pontifex_lib::aws::clients::caller_identity;
+use pontifex_lib::error::Error;
 
 /// A profile that resolves to an SSO token cache file which does not exist.
 /// Any profile that has never been logged into produces this.
 fn profile_without_a_token() -> Option<String> {
-    let profiles = gebman_lib::aws::profiles::list_profiles().ok()?;
+    let profiles = pontifex_lib::aws::profiles::list_profiles().ok()?;
     profiles
         .into_iter()
         .filter(|p| p.is_sso())
         .find(|p| {
             matches!(
-                gebman_lib::aws::sso::sso_status(p),
+                pontifex_lib::aws::sso::sso_status(p),
                 Ok(status) if !status.has_token
             )
         })

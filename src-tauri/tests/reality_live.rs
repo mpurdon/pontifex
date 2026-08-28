@@ -6,13 +6,13 @@
 //! test asserting the pattern string cannot tell you the API rejects it.
 //!
 //! Ignored by default because it needs live credentials. Run with:
-//!   GEBMAN_LIVE_PROFILE=global-event-bus \
-//!   GEBMAN_LIVE_REGISTRY=prd-global-registry \
-//!   GEBMAN_LIVE_LOG_GROUP=/aws/events/prd-global-events \
+//!   PONTIFEX_LIVE_PROFILE=global-event-bus \
+//!   PONTIFEX_LIVE_REGISTRY=prd-global-registry \
+//!   PONTIFEX_LIVE_LOG_GROUP=/aws/events/prd-global-events \
 //!   cargo test --test reality_live -- --ignored --nocapture
 
 use aws_config::BehaviorVersion;
-use gebman_lib::schema::events::check_events;
+use pontifex_lib::schema::events::check_events;
 use serde_json::Value;
 
 fn env(name: &str, fallback: &str) -> String {
@@ -28,10 +28,10 @@ fn filter_pattern(source: &str, detail_type: &str) -> String {
 #[test]
 #[ignore]
 fn checks_a_real_schema_against_real_events() {
-    let profile = env("GEBMAN_LIVE_PROFILE", "global-event-bus");
-    let registry = env("GEBMAN_LIVE_REGISTRY", "prd-global-registry");
-    let log_group = env("GEBMAN_LIVE_LOG_GROUP", "/aws/events/prd-global-events");
-    let region = env("GEBMAN_LIVE_REGION", "us-east-2");
+    let profile = env("PONTIFEX_LIVE_PROFILE", "global-event-bus");
+    let registry = env("PONTIFEX_LIVE_REGISTRY", "prd-global-registry");
+    let log_group = env("PONTIFEX_LIVE_LOG_GROUP", "/aws/events/prd-global-events");
+    let region = env("PONTIFEX_LIVE_REGION", "us-east-2");
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

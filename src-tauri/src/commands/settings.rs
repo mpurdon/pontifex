@@ -116,7 +116,7 @@ pub fn stages() -> Vec<&'static str> {
 
 /// Write an environment's SSO target into `~/.aws/config` as a named profile.
 ///
-/// Purely opt-in: gebman resolves these credentials in-app and never needs a
+/// Purely opt-in: pontifex resolves these credentials in-app and never needs a
 /// profile. This exists so the same account/role is reachable from the AWS CLI
 /// and other SDKs once you have set it up here.
 #[tauri::command]

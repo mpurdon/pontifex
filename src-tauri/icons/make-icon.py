@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate gebman's application icon.
+Generate pontifex's application icon.
 
 Kept in the repo because the icon is derived, not drawn by hand: it is built
 from the same palette the UI uses (`src/index.css`), so a theme change can be

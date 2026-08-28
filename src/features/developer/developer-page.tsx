@@ -77,7 +77,7 @@ function Facts({ rows }: { rows: (readonly [string, string | number, string?])[]
  * Diagnostics for the app itself — where its files are, how big they have
  * grown, and what it has been logging.
  *
- * Everything here answers "is gebman behaving as expected", which is otherwise
+ * Everything here answers "is pontifex behaving as expected", which is otherwise
  * only visible from a terminal the app was not started from.
  */
 export function DeveloperPage() {
@@ -177,7 +177,7 @@ export function DeveloperPage() {
     if (!info.data) return
     const { runtime, storage, caches, logFile } = info.data
     const text = [
-      `gebman ${runtime.appVersion} (${runtime.profile})`,
+      `pontifex ${runtime.appVersion} (${runtime.profile})`,
       `tauri ${runtime.tauriVersion} · ${runtime.os}/${runtime.arch} · log level ${runtime.logLevel}`,
       '',
       'Storage:',

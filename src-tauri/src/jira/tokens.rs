@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-const SERVICE: &str = "gebman.jira";
+const SERVICE: &str = "pontifex.jira";
 const TOKENS_ENTRY: &str = "oauth-tokens";
 const SECRET_ENTRY: &str = "client-secret";
 
@@ -98,7 +98,7 @@ fn keychain_error(action: &str, e: keyring::Error) -> Error {
         keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_) => {
             " — macOS asks permission the first time a new build touches this item. \
              Try again and choose “Always Allow”. If it keeps refusing, clear the item with \
-             `security delete-generic-password -s gebman.jira` and enter the secret again."
+             `security delete-generic-password -s pontifex.jira` and enter the secret again."
         }
         _ => "",
     };

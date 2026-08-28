@@ -42,7 +42,7 @@ and it already contains the client ID, the callback as registered and the
 scopes actually granted. Settings → Jira takes that URL and reads the values
 out of it, rather than asking for each to be transcribed into a field where
 one wrong character fails at consent time with a message about none of this.
-It also names any scope gebman needs that the app does not have.
+It also names any scope pontifex needs that the app does not have.
 
 The callback URL is stored whole and sent verbatim, because `localhost` and
 `127.0.0.1` are the same machine but not the same string, and Atlassian
@@ -82,7 +82,7 @@ Scopes: `read:jira-work write:jira-work read:jira-user offline_access`.
    type, labels, optional assignee), with a fallback project. Validated against
    `/project` and per-project `createmeta`, so a wrong key or a missing issue
    type is caught in Settings rather than at 403 time.
-4. **Dedupe.** Every ticket carries a `gebman-<fingerprint>` label derived from
+4. **Dedupe.** Every ticket carries a `pontifex-<fingerprint>` label derived from
    schema + environment + `issue.key`. Before creating, search for an open
    ticket with that label and offer to comment instead. This is what stops
    phase 5 being a spam cannon.
@@ -94,7 +94,7 @@ Scopes: `read:jira-work write:jira-work read:jira-user offline_access`.
 
 Projects are free to make any field mandatory — a "Discovery Environment", a
 team, a component — and a create call that omits one is rejected with a message
-naming a custom field id and nothing else. gebman asks Jira what the target
+naming a custom field id and nothing else. pontifex asks Jira what the target
 project requires (`createmeta`), shows those fields in the preview, and stores
 the answers per project so the question is asked once rather than per ticket.
 
@@ -112,7 +112,7 @@ answers the question and unblocks the rest.
 - Nothing is ever filed silently. Every write goes through a preview the user
   confirms, the same way saving to a protected environment does.
 - The secret and tokens live in the OS keychain, never in `settings.json`.
-- A 403 from a target project reads as "you cannot create issues in IPP", not
+- A 403 from a target project reads as "you cannot create issues in PROJ", not
   as a bare status code.
 
 ## Risks

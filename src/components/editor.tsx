@@ -28,7 +28,7 @@ self.MonacoEnvironment = {
   },
 }
 
-const THEME = 'gebman-dark'
+const THEME = 'pontifex-dark'
 
 monaco.editor.defineTheme(THEME, {
   base: 'vs-dark',
@@ -123,7 +123,7 @@ function applyMarkers(
     })
   }
 
-  monaco.editor.setModelMarkers(model, 'gebman', markers)
+  monaco.editor.setModelMarkers(model, 'pontifex', markers)
 }
 
 export function JsonEditor({

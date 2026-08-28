@@ -40,7 +40,7 @@ fn picker_formats() -> Vec<String> {
 fn the_picker_offers_every_string_format_the_bus_asserts() {
     let offered = picker_formats();
 
-    for name in gebman_lib::schema::ajv::asserted_format_names() {
+    for name in pontifex_lib::schema::ajv::asserted_format_names() {
         if NUMERIC_ONLY.contains(&name) {
             continue;
         }
@@ -56,7 +56,7 @@ fn the_picker_offers_every_string_format_the_bus_asserts() {
 fn the_picker_offers_nothing_the_bus_ignores() {
     for offered in picker_formats() {
         assert!(
-            gebman_lib::schema::ajv::is_known_format(&offered),
+            pontifex_lib::schema::ajv::is_known_format(&offered),
             "the inspector offers `{offered}`, which the bus does not know — picking it would \
              write a constraint that enforces nothing, and the report would then flag it"
         );

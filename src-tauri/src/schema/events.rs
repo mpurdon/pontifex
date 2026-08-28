@@ -1326,7 +1326,7 @@ mod tests {
 
     #[test]
     fn a_null_against_nullable_is_a_failure_because_the_bus_rejects_it() {
-        // `note` is declared `{"type": "string", "nullable": true}`. gebman used
+        // `note` is declared `{"type": "string", "nullable": true}`. pontifex used
         // to widen that to `["string", "null"]` before validating and report a
         // pass — but Ajv has no `nullable`, so the bus rejects this event. The
         // pass was the bug: it hid a real rejection behind a tidy report.

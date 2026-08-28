@@ -176,7 +176,7 @@ export function JiraSection({
   /**
    * Fill the fields from the authorization URL the console generates.
    *
-   * Everything gebman needs is already in that URL — client id, the callback
+   * Everything pontifex needs is already in that URL — client id, the callback
    * as registered, and the scopes actually granted. Retyping them is how a
    * single wrong character becomes a consent-screen error that mentions none
    * of this.
@@ -385,7 +385,7 @@ export function JiraSection({
         */}
         <Note tone="info">
           <span>
-            Atlassian supports only the authorization-code grant, so gebman needs a
+            Atlassian supports only the authorization-code grant, so pontifex needs a
             client ID <em>and</em> secret from an app registered in the{' '}
             <a
               className="underline"
@@ -607,7 +607,7 @@ export function JiraSection({
                     placeholder="billing-*"
                     className="font-mono"
                     spellCheck={false}
-                    list="gebman-source-patterns"
+                    list="pontifex-source-patterns"
                   />
 
                   <ProjectPicker
@@ -643,7 +643,7 @@ export function JiraSection({
           </div>
         )}
 
-        <datalist id="gebman-source-patterns">
+        <datalist id="pontifex-source-patterns">
           {patternOptions.map(({ pattern, seenAs }) => (
             <option key={pattern} value={pattern}>
               {seenAs && `events carry “${seenAs}”`}
@@ -674,7 +674,7 @@ export function JiraSection({
         </div>
 
         {/* Say why the picker is a text box. Falling back silently left the
-            impression that gebman simply does not offer a project list. */}
+            impression that pontifex simply does not offer a project list. */}
         {!projects.data && (
           <p className="px-1 text-[10px] text-warn">
             {projects.isError

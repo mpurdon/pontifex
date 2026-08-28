@@ -13,8 +13,8 @@
 //!   cargo test --test scan_stripes_live -- --ignored --nocapture
 
 use aws_config::BehaviorVersion;
-use gebman_lib::aws::log_scan::{scan_striped, ScanRequest};
-use gebman_lib::aws::sso_credentials::{SsoRoleProvider, SsoTarget};
+use pontifex_lib::aws::log_scan::{scan_striped, ScanRequest};
+use pontifex_lib::aws::sso_credentials::{SsoRoleProvider, SsoTarget};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -33,11 +33,11 @@ fn coverage_minutes(timestamps: &[i64]) -> i64 {
 #[test]
 #[ignore]
 fn striping_samples_more_of_the_window_than_a_linear_scan() {
-    let session = env("GEBMAN_LIVE_SESSION", "trajector");
-    let account = env("GEBMAN_LIVE_ACCOUNT", "024848448323");
-    let role = env("GEBMAN_LIVE_ROLE", "ReadOnlyAccess");
-    let log_group = env("GEBMAN_LIVE_LOG_GROUP", "/aws/events/prd-global-events");
-    let region = env("GEBMAN_LIVE_REGION", "us-east-2");
+    let session = env("PONTIFEX_LIVE_SESSION", "trajector");
+    let account = env("PONTIFEX_LIVE_ACCOUNT", "333333333333");
+    let role = env("PONTIFEX_LIVE_ROLE", "ReadOnlyAccess");
+    let log_group = env("PONTIFEX_LIVE_LOG_GROUP", "/aws/events/prd-global-events");
+    let region = env("PONTIFEX_LIVE_REGION", "us-east-2");
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -63,9 +63,9 @@ fn striping_samples_more_of_the_window_than_a_linear_scan() {
         let start = end - window_minutes * 60_000;
         // Deliberately small, so both scans are forced to stop early — the
         // whole question is *which* events they got, not how many.
-        let budget_events: usize = env("GEBMAN_LIVE_MAX_EVENTS", "1500")
+        let budget_events: usize = env("PONTIFEX_LIVE_MAX_EVENTS", "1500")
             .parse()
-            .expect("GEBMAN_LIVE_MAX_EVENTS");
+            .expect("PONTIFEX_LIVE_MAX_EVENTS");
 
         // --- linear: one stripe, which is the old behaviour ----------------
         let linear = scan_striped(
@@ -101,13 +101,13 @@ fn striping_samples_more_of_the_window_than_a_linear_scan() {
         .await
         .expect("striped scan");
 
-        let types_of = |events: &[(String, String, gebman_lib::events_cache::CachedEvent)]| {
+        let types_of = |events: &[(String, String, pontifex_lib::events_cache::CachedEvent)]| {
             events
                 .iter()
                 .map(|(s, d, _)| format!("{s}@{d}"))
                 .collect::<BTreeSet<String>>()
         };
-        let stamps_of = |events: &[(String, String, gebman_lib::events_cache::CachedEvent)]| {
+        let stamps_of = |events: &[(String, String, pontifex_lib::events_cache::CachedEvent)]| {
             events.iter().map(|(_, _, e)| e.timestamp).collect::<Vec<_>>()
         };
 

@@ -188,7 +188,7 @@ export function componentSchemas(doc: unknown): Record<string, JsonObject> {
  * The declared type names, as a list.
  *
  * `type` is a string far more often than an array, but the array form is how
- * draft-07 spells "or null" — the spelling gebman now writes, and the one the
+ * draft-07 spells "or null" — the spelling pontifex now writes, and the one the
  * bus honours — so reading only the string form would show every nullable
  * field as untyped.
  */

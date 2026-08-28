@@ -1,13 +1,13 @@
 //! Exercises SSO session discovery against the machine's real `~/.aws/config`.
 //!
-//! These paths are what let gebman reach an account with no profile behind it,
+//! These paths are what let pontifex reach an account with no profile behind it,
 //! so they need to behave sanely in the state users actually hit: a session
 //! that is declared but whose token has lapsed.
 //!
 //! Skipped when no SSO session is configured locally.
 
-use gebman_lib::aws::{profiles, sso, sso_credentials};
-use gebman_lib::error::Error;
+use pontifex_lib::aws::{profiles, sso, sso_credentials};
+use pontifex_lib::error::Error;
 
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()

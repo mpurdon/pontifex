@@ -5,7 +5,7 @@
 //!   cargo test --test cache_live -- --ignored --nocapture
 
 use aws_config::BehaviorVersion;
-use gebman_lib::events_cache::{cache_key, parse_event, CachedEvent, EventCache};
+use pontifex_lib::events_cache::{cache_key, parse_event, CachedEvent, EventCache};
 use std::time::Instant;
 
 fn env(name: &str, fallback: &str) -> String {
@@ -15,9 +15,9 @@ fn env(name: &str, fallback: &str) -> String {
 #[test]
 #[ignore]
 fn caching_removes_the_second_fetch() {
-    let profile = env("GEBMAN_LIVE_PROFILE", "global-event-bus");
-    let log_group = env("GEBMAN_LIVE_LOG_GROUP", "/aws/events/prd-global-events");
-    let region = env("GEBMAN_LIVE_REGION", "us-east-2");
+    let profile = env("PONTIFEX_LIVE_PROFILE", "global-event-bus");
+    let log_group = env("PONTIFEX_LIVE_LOG_GROUP", "/aws/events/prd-global-events");
+    let region = env("PONTIFEX_LIVE_REGION", "us-east-2");
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -25,7 +25,7 @@ fn caching_removes_the_second_fetch() {
         .expect("tokio runtime");
 
     rt.block_on(async {
-        let dir = std::env::temp_dir().join(format!("gebman-cache-live-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pontifex-cache-live-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let cache = EventCache::load(&dir);
@@ -68,7 +68,7 @@ fn caching_removes_the_second_fetch() {
         }
         assert!(!by_type.is_empty(), "no events in {log_group} in the last 6h");
 
-        let now = gebman_lib::events_cache::now_ms();
+        let now = pontifex_lib::events_cache::now_ms();
         let (type_key, events) = by_type.iter().next().unwrap();
         let (source, detail_type) = type_key.split_once('@').unwrap();
         let key = cache_key("prd", &log_group, source, detail_type);

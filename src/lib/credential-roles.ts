@@ -1,7 +1,7 @@
 import type { Environment, Settings } from '@/lib/types'
 
 /**
- * What an AWS account is used for in gebman.
+ * What an AWS account is used for in pontifex.
  *
  * There are exactly two jobs, and they are unrelated: reading and writing the
  * EventBridge schema registry and its log groups, and calling Bedrock to

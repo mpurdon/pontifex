@@ -474,7 +474,7 @@ export function EmptyState({
  * fix is a specific action rather than a retry.
  *
  * When `onLogin` is absent on an auth error, the profile's credentials come
- * from outside gebman — an external manager like Leapp or aws-vault wrote them
+ * from outside pontifex — an external manager like Leapp or aws-vault wrote them
  * into `~/.aws/credentials`. Offering a sign-in there would be a button that
  * cannot work, so we say where the fix actually lives instead.
  */

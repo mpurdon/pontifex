@@ -34,13 +34,13 @@ function doc() {
 describe('buildSampleEvent', () => {
   it('wraps the payload in a complete EventBridge envelope', () => {
     const event = buildSampleEvent(doc(), {
-      source: 'milo-medical',
-      detailType: 'packetNotification-assigned',
+      source: 'orders-api',
+      detailType: 'orderNotification-assigned',
       detailSchema: 'Sync',
     })
 
-    expect(event.source).toBe('milo-medical')
-    expect(event['detail-type']).toBe('packetNotification-assigned')
+    expect(event.source).toBe('orders-api')
+    expect(event['detail-type']).toBe('orderNotification-assigned')
     for (const key of [
       'version',
       'id',
@@ -135,7 +135,7 @@ describe('null-accepting types', () => {
       },
     }
     const event = buildSampleEvent(widened, {
-      source: 'milo-medical',
+      source: 'orders-api',
       detailType: 'thing-happened',
       detailSchema: 'Sync',
     })
@@ -150,7 +150,7 @@ describe('null-accepting types', () => {
 describe('putEventsCommand', () => {
   it('escapes the detail as the JSON string the CLI expects', () => {
     const event = buildSampleEvent(doc(), {
-      source: 'milo-medical',
+      source: 'orders-api',
       detailType: 'thing-happened',
       detailSchema: 'Metadata',
     })
@@ -162,7 +162,7 @@ describe('putEventsCommand', () => {
     // The --entries payload must parse, with Detail as an escaped string.
     const json = command.slice(command.indexOf('['), command.lastIndexOf(']') + 1)
     const entries = JSON.parse(json)
-    expect(entries[0].Source).toBe('milo-medical')
+    expect(entries[0].Source).toBe('orders-api')
     expect(entries[0].EventBusName).toBe('prd-global-bus')
     expect(JSON.parse(entries[0].Detail)).toEqual({ trackingId: 'tracking-123' })
   })

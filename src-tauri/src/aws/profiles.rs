@@ -37,7 +37,7 @@ pub struct AwsProfile {
     /// than being derived from `~/.aws/config`.
     ///
     /// These are typically written by an external credential manager (Leapp,
-    /// aws-vault, saml2aws, a CI script). gebman cannot refresh them — the user
+    /// aws-vault, saml2aws, a CI script). pontifex cannot refresh them — the user
     /// has to renew the session in whatever tool owns it — so the UI must not
     /// offer an SSO sign-in that could never work.
     pub externally_managed: bool,
@@ -85,7 +85,7 @@ impl AwsProfile {
     ///
     /// CLI v2 caches under `~/.aws/sso/cache/<sha1(key)>.json` where `key` is
     /// the *session name* for `sso_session` profiles and the *start URL* for
-    /// legacy ones. Matching that exactly is what lets gebman and the CLI share
+    /// legacy ones. Matching that exactly is what lets pontifex and the CLI share
     /// one login in both directions.
     pub fn token_cache_key(&self) -> Option<String> {
         match self.kind {
@@ -253,7 +253,7 @@ fn build_profile(
 /// An `[sso-session <name>]` block from `~/.aws/config`.
 ///
 /// A session is the thing you actually sign into; the accounts and roles it
-/// grants are discovered from AWS, not declared locally. gebman can therefore
+/// grants are discovered from AWS, not declared locally. pontifex can therefore
 /// reach any account the session covers without a profile existing for it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -357,21 +357,21 @@ region=us-east-2
 source_profile=nieto
 region=us-east-1
 
-[profile purdonmoi-org-admin]
-sso_start_url = https://purdonmoi.awsapps.com/start
+[profile other-org-admin]
+sso_start_url = https://other-org.awsapps.com/start
 sso_region = us-east-1
-sso_account_id = 142492421919
+sso_account_id = 999999999999
 sso_role_name = OrganizationAdmin
 region = us-east-1
 
 [sso-session trajector]
-sso_start_url = https://trajector-aws.awsapps.com/start
+sso_start_url = https://d-9067f2a2b3.awsapps.com/start
 sso_region = us-east-2
 sso_registration_scopes = sso:account:access
 
 [profile claude-code-bedrock]
 sso_session = trajector
-sso_account_id = 224075521436
+sso_account_id = 111111111111
 sso_role_name = ClaudeCodeBedrockAccess
 region = us-east-2
 "#;
@@ -400,7 +400,7 @@ region = us-east-2
         assert_eq!(p.kind, ProfileKind::SsoSession);
         assert_eq!(
             p.sso_start_url.as_deref(),
-            Some("https://trajector-aws.awsapps.com/start")
+            Some("https://d-9067f2a2b3.awsapps.com/start")
         );
         assert_eq!(p.sso_region.as_deref(), Some("us-east-2"));
         // Cache key is the *session name*, not the URL.
@@ -409,12 +409,12 @@ region = us-east-2
 
     #[test]
     fn handles_legacy_inline_sso() {
-        let p = parse("purdonmoi-org-admin");
+        let p = parse("other-org-admin");
         assert_eq!(p.kind, ProfileKind::SsoLegacy);
         // Legacy profiles key their cache on the start URL.
         assert_eq!(
             p.token_cache_key().as_deref(),
-            Some("https://purdonmoi.awsapps.com/start")
+            Some("https://other-org.awsapps.com/start")
         );
     }
 
@@ -432,7 +432,7 @@ region = us-east-2
         // produces an unresolvable credential error and an SSO sign-in that
         // fails with InvalidRequestException.
         let template = AwsProfile {
-            name: "purdonmoi-dev".into(),
+            name: "other-org-dev".into(),
             kind: ProfileKind::SsoLegacy,
             region: Some("us-east-1".into()),
             sso_start_url: Some("https://YOUR-ORG.awsapps.com/start".into()),
@@ -462,7 +462,7 @@ region = us-east-2
     #[test]
     fn accepts_real_profiles() {
         assert!(!parse("claude-code-bedrock").is_placeholder());
-        assert!(!parse("purdonmoi-org-admin").is_placeholder());
+        assert!(!parse("other-org-admin").is_placeholder());
         // Non-SSO profiles have no account id or URL to judge.
         assert!(!parse("SAFE_PPE").is_placeholder());
         assert!(!parse("default").is_placeholder());

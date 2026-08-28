@@ -1127,16 +1127,16 @@ mod tests {
     #[test]
     fn matches_a_schema_to_the_bucket_named_exactly_after_it() {
         assert_eq!(
-            matched_key("milo-medical@packet-assigned", &["milo-medical@packet-assigned"]),
-            Some("milo-medical@packet-assigned".into())
+            matched_key("orders-api@order-assigned", &["orders-api@order-assigned"]),
+            Some("orders-api@order-assigned".into())
         );
     }
 
     #[test]
     fn matches_a_discovered_schemas_pascal_case_detail_type() {
         assert_eq!(
-            matched_key("milo-medical@packet-assigned", &["milo-medical@PacketAssigned"]),
-            Some("milo-medical@PacketAssigned".into())
+            matched_key("orders-api@order-assigned", &["orders-api@OrderAssigned"]),
+            Some("orders-api@OrderAssigned".into())
         );
     }
 
@@ -1174,14 +1174,14 @@ mod tests {
 
     #[test]
     fn reports_no_traffic_when_nothing_matches() {
-        assert_eq!(matched_key("milo-medical@packet-assigned", &["other@thing"]), None);
+        assert_eq!(matched_key("orders-api@order-assigned", &["other@thing"]), None);
     }
 
     #[test]
     fn does_not_index_bucket_keys_that_are_already_legal_names() {
         // Only names that actually changed under sanitization are indexed, so
         // a legal name cannot be claimed by an unrelated schema.
-        let index = sanitized_bucket_index(&["milo-medical@packet-assigned".to_string()]);
+        let index = sanitized_bucket_index(&["orders-api@order-assigned".to_string()]);
         assert!(index.is_empty());
     }
 
