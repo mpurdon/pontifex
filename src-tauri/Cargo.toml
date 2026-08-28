@@ -1,6 +1,6 @@
 [package]
 name = "pontifex"
-version = "0.1.1"
+version = "0.1.2"
 description = "Desktop manager for the Trajector Global Event Bus"
 authors = ["Matthew Purdon <matthew@codenaked.org>"]
 license = "MIT"

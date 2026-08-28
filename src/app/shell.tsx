@@ -136,10 +136,6 @@ export function Shell() {
   return (
     <div className="flex h-full flex-col bg-surface-0">
       <header className="flex h-11 shrink-0 items-center gap-3 border-b border-edge bg-surface-1 px-3">
-        <span className="text-sm font-semibold tracking-tight text-accent">
-          Pontifex
-        </span>
-
         <nav className="flex items-center gap-0.5">
           {nav.map(({ to, label, icon: Icon }) => (
             <NavLink
