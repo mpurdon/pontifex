@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
-import { Check, ChevronDown, ChevronRight, Copy, RefreshCw, ScrollText } from 'lucide-react'
+import { ChevronDown, ChevronRight, RefreshCw, ScrollText } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { LogEvent } from '@/lib/types'
 import {
   Badge,
   Button,
   Checkbox,
+  CopyButton,
   EmptyState,
   ErrorBox,
   Input,
@@ -16,6 +17,7 @@ import {
 } from '@/components/ui'
 import { useSettings } from '@/app/settings-context'
 import { useLoginForEnvironment } from '@/app/login-dialog'
+import { formatTime } from '@/lib/format'
 
 const RANGES = [
   { label: 'Last 15m', minutes: 15 },
@@ -24,12 +26,6 @@ const RANGES = [
   { label: 'Last 24h', minutes: 1440 },
   { label: 'Last 7d', minutes: 10080 },
 ]
-
-function formatTime(ms: number | null): string {
-  if (ms === null) return '—'
-  const date = new Date(ms)
-  return `${date.toLocaleTimeString([], { hour12: false })}.${String(date.getMilliseconds()).padStart(3, '0')}`
-}
 
 export function LogsPage() {
   const { envId, activeEnvironment } = useSettings()
@@ -251,27 +247,6 @@ function eventText(event: LogEvent): string {
   return event.event ? JSON.stringify(event.event, null, 2) : event.message
 }
 
-function CopyEventButton({ event }: { event: LogEvent }) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      title="Copy event JSON"
-      onClick={(e) => {
-        // The row toggles on click; copying should not expand it.
-        e.stopPropagation()
-        void navigator.clipboard.writeText(eventText(event)).then(() => {
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        })
-      }}
-    >
-      {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-    </Button>
-  )
-}
-
 function LogRow({
   event,
   expanded,
@@ -311,7 +286,7 @@ function LogRow({
           {event.eventId ?? '—'}
         </td>
         <td className="pr-1 text-right">
-          <CopyEventButton event={event} />
+          <CopyButton text={eventText(event)} title="Copy event JSON" />
         </td>
       </tr>
       {expanded && (

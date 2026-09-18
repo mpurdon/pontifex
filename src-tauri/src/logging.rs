@@ -40,10 +40,13 @@ pub mod cat {
 
     /// Filing producer bugs: OAuth, ticket creation, routing.
     pub const JIRA: &str = "jira";
+    /// Watch mode: the passive poller, its cursor, and what it matched.
+    pub const WATCH: &str = "watch";
 
     /// Every category, for the UI's filter list and for validation.
     pub const ALL: &[&str] = &[
         APP, IPC, UI, AWS, SSO, REGISTRY, SCHEMA, EVENTS, CACHE, BEDROCK, TOPOLOGY, SETTINGS,
+        JIRA, WATCH,
     ];
 }
 

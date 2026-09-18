@@ -51,6 +51,13 @@ import type {
   TicketPreview,
   Topology,
   ValidationReport,
+  Watch,
+  CompiledWatch,
+  NotifierOutcome,
+  WatchHit,
+  WatchMark,
+  WatchProbe,
+  WatchStatus,
   WriteResult,
 } from './types'
 
@@ -75,7 +82,7 @@ export function log(level: LogLevel, category: string, message: string): void {
  * few seconds while it is open, so logging them would fill the log with the act
  * of reading the log.
  */
-const UNLOGGED = new Set(['ui_log', 'log_categories', 'read_app_logs', 'dev_info'])
+const UNLOGGED = new Set(['ui_log', 'log_categories', 'read_app_logs', 'dev_info', 'watch_status'])
 
 /** A call slower than this is worth seeing without turning on debug. */
 const SLOW_CALL_MS = 2_000
@@ -377,12 +384,20 @@ export const registryReport = (
 /**
  * Draft a schema for an event type that has none, inferred from its traffic.
  * Uses cached events when available, so this is usually instant.
+ *
+ * `logGroup` narrows the sample to one group and `aroundMs` to two minutes
+ * around one instant. Without them every group is scanned over a day, which
+ * is right when nothing is known about where or when the type arrives and
+ * wasteful when the caller has just watched it land.
  */
 export const draftFromEvents = (
   source: string,
   detailType: string,
   envId?: string,
   minutes?: number,
+  logGroup?: string,
+  /** Centre a two-minute window on this instant instead of sampling `minutes` back from now. */
+  aroundMs?: number,
 ) =>
   withTimeout(
     invoke<InferredDraft>('draft_from_events', {
@@ -390,6 +405,8 @@ export const draftFromEvents = (
       detailType,
       envId,
       minutes,
+      logGroup,
+      aroundMs,
     }),
     60_000,
     'Inferring the schema',
@@ -537,3 +554,63 @@ export const issuesForSchemas = (
   envId?: string,
 ) =>
   invoke<SchemaIssues[]>('issues_for_schemas', { names, minutes, logGroup, envId })
+
+// --- watch mode -----------------------------------------------------------
+
+export const listWatches = (envId?: string) =>
+  invoke<Watch[]>('list_watches', { envId })
+
+/** Create or update. An empty `id` gets one assigned. */
+export const saveWatch = (watch: Watch) => invoke<Watch>('save_watch', { watch })
+
+export const deleteWatch = (id: string) => invoke<void>('delete_watch', { id })
+
+/** The filter pattern a watch compiles to, and its one-line summary. */
+export const compileWatchPattern = (watch: Watch) =>
+  invoke<CompiledWatch>('compile_watch_pattern', { watch })
+
+/** Arm or disarm an environment's poller. Persisted across restarts. */
+export const setWatching = (enabled: boolean, envId?: string) =>
+  invoke<WatchStatus>('set_watching', { envId, enabled })
+
+export const watchStatus = () => invoke<WatchStatus[]>('watch_status')
+
+export const setWatchPollSeconds = (seconds: number) =>
+  invoke<number>('set_watch_poll_seconds', { seconds })
+
+export const setWatchIdleTimeout = (minutes: number) =>
+  invoke<number>('set_watch_idle_timeout', { minutes })
+
+/** Show and focus the main window, e.g. to put a question in front of someone. */
+export const showMainWindow = () => invoke<void>('show_main_window')
+
+export const listWatchHits = (envId?: string, limit?: number) =>
+  invoke<WatchHit[]>('list_watch_hits', { envId, limit })
+
+/** When watching started and stopped, newest first. */
+export const listWatchMarks = (envId?: string) =>
+  invoke<WatchMark[]>('list_watch_marks', { envId })
+
+/** Forget an environment's hits — all of them, or one watch's. */
+export const clearWatchHits = (envId?: string, watchId?: string) =>
+  invoke<void>('clear_watch_hits', { envId, watchId })
+
+export const markWatchHitsSeen = (envId?: string) =>
+  invoke<void>('mark_watch_hits_seen', { envId })
+
+/** Show a notification now and report what macOS did with it. */
+export const testNotification = () => invoke<NotifierOutcome>('test_notification')
+
+/** Ask macOS for permission again under a fresh identity, then test. */
+export const askNotificationPermissionAgain = () =>
+  invoke<NotifierOutcome>('ask_notification_permission_again')
+
+/** System Settings → Notifications, for turning Pontifex back on. */
+export const openNotificationSettings = () => invoke<void>('open_notification_settings')
+
+/** Poll immediately; the interval restarts from that poll. */
+export const pollNow = (envId?: string) => invoke<void>('poll_now', { envId })
+
+/** Run a watch's pattern over the last `hours`, sampled across the whole window. */
+export const probeWatch = (watch: Watch, hours?: number) =>
+  invoke<WatchProbe>('probe_watch', { watch, hours })

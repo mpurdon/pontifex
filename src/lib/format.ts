@@ -25,6 +25,13 @@ export function formatAge(ms: number): string {
   return hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`
 }
 
+/** A clock time with milliseconds, `HH:MM:SS.mmm`, for event rows. */
+export function formatTime(ms: number | null): string {
+  if (ms === null) return '—'
+  const date = new Date(ms)
+  return `${date.toLocaleTimeString([], { hour12: false })}.${String(date.getMilliseconds()).padStart(3, '0')}`
+}
+
 /** A sampling window as a span, e.g. `24h` or `7d`. */
 export function formatWindow(minutes: number): string {
   return minutes >= 1440 ? `${Math.round(minutes / 1440)}d` : `${Math.round(minutes / 60)}h`

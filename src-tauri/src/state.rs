@@ -2,6 +2,7 @@ use crate::aws::clients::ClientCache;
 use crate::events_cache::EventCache;
 use crate::error::{Error, Result};
 use crate::settings::{Environment, Settings};
+use crate::watch::{WatchStore, Watcher};
 use aws_config::SdkConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,17 +16,24 @@ pub struct AppState {
     /// Sampled events, so a schema can be re-checked without re-scanning
     /// CloudWatch. See `events_cache`.
     pub events: EventCache,
+    /// Watch mode's definitions, hits and cursors. See `watch`.
+    pub watch: WatchStore,
+    /// The pollers themselves, one per armed environment.
+    pub watcher: Watcher,
 }
 
 impl AppState {
     pub fn new(settings: Settings, config_dir: PathBuf, cache_dir: PathBuf) -> Self {
         let events = EventCache::load(&cache_dir);
         events.set_budget_bytes(settings.scan.cache_bytes());
+        let watch = WatchStore::load(&config_dir);
         AppState {
             settings: RwLock::new(settings),
             config_dir,
             clients: ClientCache::new(),
             events,
+            watch,
+            watcher: Watcher::new(),
         }
     }
 

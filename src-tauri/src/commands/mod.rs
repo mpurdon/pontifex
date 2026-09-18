@@ -7,3 +7,4 @@ pub mod reality;
 pub mod schemas;
 pub mod settings;
 pub mod topology;
+pub mod watch;

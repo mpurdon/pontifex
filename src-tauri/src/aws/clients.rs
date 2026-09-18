@@ -48,6 +48,11 @@ pub struct ConfigKey {
 #[derive(Default)]
 pub struct ClientCache {
     configs: RwLock<HashMap<ConfigKey, Arc<SdkConfig>>>,
+    /// Long-running work that should retry the moment credentials change —
+    /// the watch pollers, parked on an expired token — subscribes here.
+    /// Each subscriber has its own `Notify`, so a change that lands while a
+    /// subscriber is busy is kept as a permit rather than lost.
+    subscribers: std::sync::Mutex<Vec<std::sync::Weak<tokio::sync::Notify>>>,
 }
 
 impl ClientCache {
@@ -72,13 +77,20 @@ impl ClientCache {
         };
 
         if let Some(cfg) = self.configs.read().await.get(&key) {
-            ldebug!(cat::AWS, "sdk config cache hit for {} in {region}", describe_source(source));
+            ldebug!(
+                cat::AWS,
+                "sdk config cache hit for {} in {region}",
+                describe_source(source)
+            );
             return Ok(cfg.clone());
         }
 
         let timer = crate::logging::Timed::start(
             cat::AWS,
-            format!("resolving credentials for {} in {region}", describe_source(source)),
+            format!(
+                "resolving credentials for {} in {region}",
+                describe_source(source)
+            ),
         );
         let cfg = Arc::new(build_config(source, region).await);
         timer.done("config built");
@@ -90,32 +102,67 @@ impl ClientCache {
     /// Drop cached configs for a profile. Call after a successful SSO login so
     /// the next request re-reads the freshly written token cache.
     pub async fn invalidate(&self, profile: &str) {
-        linfo!(cat::AWS, "invalidating cached configs for profile {profile}");
+        linfo!(
+            cat::AWS,
+            "invalidating cached configs for profile {profile}"
+        );
         self.configs
             .write()
             .await
             .retain(|k, _| k.source != CredentialSource::Profile(profile.to_string()));
+        self.announce_change();
     }
 
     /// Drop cached configs that depend on an SSO session, after signing into it.
     pub async fn invalidate_session(&self, session: &str) {
-        linfo!(cat::AWS, "invalidating cached configs for SSO session {session}");
+        linfo!(
+            cat::AWS,
+            "invalidating cached configs for SSO session {session}"
+        );
         self.configs
             .write()
             .await
             .retain(|k, _| k.source.sso_session() != Some(session));
+        self.announce_change();
     }
 
     pub async fn invalidate_all(&self) {
         linfo!(cat::AWS, "invalidating every cached SDK config");
         self.configs.write().await.clear();
+        self.announce_change();
+    }
+
+    /// A handle that is notified whenever credentials are invalidated. Hold
+    /// it for the life of the task; `notified().await` completes on the next
+    /// change, or at once if one arrived since the last wait.
+    pub fn subscribe(&self) -> Arc<tokio::sync::Notify> {
+        let notify = Arc::new(tokio::sync::Notify::new());
+        self.subscribers
+            .lock()
+            .expect("client cache subscribers poisoned")
+            .push(Arc::downgrade(&notify));
+        notify
+    }
+
+    /// Wake every live subscriber, forgetting the ones whose task is gone.
+    fn announce_change(&self) {
+        let mut subscribers = self
+            .subscribers
+            .lock()
+            .expect("client cache subscribers poisoned");
+        subscribers.retain(|weak| match weak.upgrade() {
+            Some(notify) => {
+                notify.notify_one();
+                true
+            }
+            None => false,
+        });
     }
 
     /// How many SDK configs are cached, for the diagnostics screen.
     pub async fn count(&self) -> usize {
         self.configs.read().await.len()
     }
-
 }
 
 /// How a credential source reads in a log line.
@@ -123,7 +170,10 @@ fn describe_source(source: &CredentialSource) -> String {
     match source {
         CredentialSource::Profile(p) => format!("profile '{p}'"),
         CredentialSource::Sso(t) => {
-            format!("SSO {}/{} via session '{}'", t.account_id, t.role_name, t.session)
+            format!(
+                "SSO {}/{} via session '{}'",
+                t.account_id, t.role_name, t.session
+            )
         }
     }
 }
@@ -136,10 +186,12 @@ async fn build_config(source: &CredentialSource, region: &str) -> SdkConfig {
         CredentialSource::Profile(profile) => builder.profile_name(profile).load().await,
         // The provider re-reads the token cache on every refresh, so a fresh
         // sign-in takes effect without rebuilding this config.
-        CredentialSource::Sso(target) => builder
-            .credentials_provider(SsoRoleProvider::new(target.clone()))
-            .load()
-            .await,
+        CredentialSource::Sso(target) => {
+            builder
+                .credentials_provider(SsoRoleProvider::new(target.clone()))
+                .load()
+                .await
+        }
     }
 }
 
@@ -161,7 +213,10 @@ pub async fn caller_identity(cfg: &SdkConfig) -> Result<CallerIdentity> {
     let timer = crate::logging::Timed::start(cat::AWS, "sts:GetCallerIdentity");
     let client = aws_sdk_sts::Client::new(cfg);
     let out = client.get_caller_identity().send().await.map_err(|e| {
-        let code = e.as_service_error().and_then(|se| se.meta().code()).map(str::to_string);
+        let code = e
+            .as_service_error()
+            .and_then(|se| se.meta().code())
+            .map(str::to_string);
         let error = classify(code.as_deref(), describe_sdk_error(&e));
         error
     });
@@ -191,7 +246,9 @@ pub async fn caller_identity(cfg: &SdkConfig) -> Result<CallerIdentity> {
 /// cause only reachable through the source chain — which is exactly where
 /// "token expired" and "no credentials" live. Walking the chain is what makes
 /// [`classify`] able to tell an auth problem from a genuine API failure.
-pub fn describe_sdk_error<E, R>(err: &aws_smithy_runtime_api::client::result::SdkError<E, R>) -> String
+pub fn describe_sdk_error<E, R>(
+    err: &aws_smithy_runtime_api::client::result::SdkError<E, R>,
+) -> String
 where
     E: std::error::Error + 'static,
     R: std::fmt::Debug + 'static,
@@ -221,12 +278,16 @@ where
 }
 
 /// Extract a service error code from any SDK error, if one is present.
-pub fn error_code<E, R>(err: &aws_smithy_runtime_api::client::result::SdkError<E, R>) -> Option<String>
+pub fn error_code<E, R>(
+    err: &aws_smithy_runtime_api::client::result::SdkError<E, R>,
+) -> Option<String>
 where
     E: std::error::Error + aws_smithy_types::error::metadata::ProvideErrorMetadata + 'static,
     R: std::fmt::Debug + 'static,
 {
-    err.as_service_error().and_then(|se| se.code()).map(str::to_string)
+    err.as_service_error()
+        .and_then(|se| se.code())
+        .map(str::to_string)
 }
 
 /// Convert an SDK error into our error type, classifying it along the way.

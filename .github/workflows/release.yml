@@ -53,6 +53,12 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
+      # The notification helper is a bundle resource on macOS, and
+      # tauri-build copies resources on every compile, so it has to exist
+      # before the Rust suite builds — not only before `tauri build`.
+      - name: Build notification helper
+        run: sh scripts/build-notifier.sh
+
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --lib

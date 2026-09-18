@@ -88,10 +88,7 @@ pub async fn check_profile(
 /// The header badge checks this rather than a profile, because an environment
 /// backed by an in-app SSO target has no profile to check.
 #[tauri::command]
-pub async fn check_environment(
-    state: State<'_, AppState>,
-    env_id: String,
-) -> Result<ProfileCheck> {
+pub async fn check_environment(state: State<'_, AppState>, env_id: String) -> Result<ProfileCheck> {
     let env = state.resolve_environment(Some(&env_id)).await?;
 
     let label = match &env.sso {
@@ -171,7 +168,10 @@ pub async fn sso_login(
             })
         }
         Err(native_err) => {
-            lwarn!(cat::SSO, "native SSO login failed for {profile}, falling back to CLI: {native_err}");
+            lwarn!(
+                cat::SSO,
+                "native SSO login failed for {profile}, falling back to CLI: {native_err}"
+            );
             match sso::login_via_cli(&profile).await {
                 Ok(message) => {
                     state.clients.invalidate(&profile).await;

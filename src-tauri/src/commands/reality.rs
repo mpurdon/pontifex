@@ -3,9 +3,9 @@
 use crate::aws::clients::map_sdk_error;
 use crate::aws::log_scan;
 use crate::error::{Error, Result};
+use crate::events_cache::{cache_key, parse_event, CachedEvent};
 use crate::logging::cat;
 use crate::schema::events::{self, EventCheckReport, FieldObservation};
-use crate::events_cache::{cache_key, parse_event, CachedEvent};
 use crate::schema::model::{self, EventIdentity};
 use crate::schema::repair::{self, Repair};
 use crate::settings::Environment;
@@ -180,9 +180,8 @@ pub async fn check_against_events(
         .await
         .scan
         .seconds_or(request.max_seconds);
-    let start_time = (time::OffsetDateTime::now_utc()
-        - time::Duration::minutes(minutes))
-    .unix_timestamp()
+    let start_time = (time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes))
+        .unix_timestamp()
         * 1000;
 
     let now = crate::events_cache::now_ms();
@@ -323,7 +322,11 @@ pub async fn check_against_events(
 
     let checking = crate::logging::Timed::start(
         cat::SCHEMA,
-        format!("checking {} against {} events", identity.schema_name(), payloads.len()),
+        format!(
+            "checking {} against {} events",
+            identity.schema_name(),
+            payloads.len()
+        ),
     );
     let report = events::check_events(&document, &type_name, &payloads)?;
     checking.done(format!(
@@ -526,8 +529,9 @@ pub async fn registry_report(
             env.registry_name
         ),
     );
-    let start_time =
-        (time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes)).unix_timestamp() * 1000;
+    let start_time = (time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes))
+        .unix_timestamp()
+        * 1000;
 
     // --- one striped pass over the log group -------------------------------
     //
@@ -605,7 +609,10 @@ pub async fn registry_report(
             // identical payloads would blow memory for no extra signal.
             if bucket.len() < 50 {
                 bucket.push(cached.detail.clone());
-                cacheable.entry((group.clone(), key)).or_default().push(cached);
+                cacheable
+                    .entry((group.clone(), key))
+                    .or_default()
+                    .push(cached);
             }
         }
     }
@@ -783,11 +790,12 @@ pub async fn registry_report(
         .iter()
         .filter(|(key, _)| !matched.contains(*key))
         .filter_map(|(key, payloads)| {
-            key.split_once('@').map(|(source, detail_type)| UnregisteredEvent {
-                source: source.to_string(),
-                detail_type: detail_type.to_string(),
-                count: observed.get(key).copied().unwrap_or(payloads.len()),
-            })
+            key.split_once('@')
+                .map(|(source, detail_type)| UnregisteredEvent {
+                    source: source.to_string(),
+                    detail_type: detail_type.to_string(),
+                    count: observed.get(key).copied().unwrap_or(payloads.len()),
+                })
         })
         .collect();
     unregistered.sort_by_key(|e| std::cmp::Reverse(e.count));
@@ -851,6 +859,10 @@ pub async fn draft_from_events(
     env_id: Option<String>,
     minutes: Option<i64>,
     log_group: Option<String>,
+    // Centre the window on this instant (epoch ms) instead of ending it now:
+    // one minute either side. For drafting from one known event — a watch
+    // hit — that is a two-minute scan instead of a day's.
+    around_ms: Option<i64>,
 ) -> Result<InferredDraft> {
     let identity = EventIdentity {
         source: source.trim().to_string(),
@@ -870,8 +882,21 @@ pub async fn draft_from_events(
 
     let minutes = minutes.unwrap_or(60 * 24).max(1);
     let now = crate::events_cache::now_ms();
-    let start_time =
-        (time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes)).unix_timestamp() * 1000;
+    let (start_time, end_time, window_label) = match around_ms {
+        Some(at) => (
+            at - 60_000,
+            // The cache records this as covered, so it must not reach into
+            // the future and claim events that have not happened yet.
+            (at + 60_000).min(now),
+            "within a minute of that event".to_string(),
+        ),
+        None => (
+            (time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes)).unix_timestamp()
+                * 1000,
+            now,
+            format!("over the last {minutes} minutes"),
+        ),
+    };
 
     // Every step emits, so the UI can say what is happening instead of
     // showing an indefinite spinner.
@@ -890,7 +915,7 @@ pub async fn draft_from_events(
             &identity.source,
             &identity.detail_type,
             start_time,
-            now,
+            end_time,
         )
         .await
         .payloads;
@@ -912,6 +937,7 @@ pub async fn draft_from_events(
                     .filter_log_events()
                     .log_group_name(candidate)
                     .start_time(start_time)
+                    .end_time(end_time)
                     .filter_pattern(&pattern)
                     .limit(200)
                     .send()
@@ -939,7 +965,7 @@ pub async fn draft_from_events(
                         cache_key(&env.id, candidate, &identity.source, &identity.detail_type);
                     state
                         .events
-                        .merge(&key, fetched, start_time, now, false)
+                        .merge(&key, fetched, start_time, end_time, false)
                         .await;
                     state.events.persist().await;
                     break;
@@ -951,17 +977,23 @@ pub async fn draft_from_events(
 
     if payloads.is_empty() {
         return Err(Error::NotFound(format!(
-            "No events for {} in {} over the last {minutes} minutes, so there is \
-             nothing to infer a shape from.",
+            "No events for {} in {} {window_label}, so there is nothing to infer a shape from.",
             identity.schema_name(),
             groups.join(" or ")
         )));
     }
 
-    stage(&format!("Inferring a shape from {} events…", payloads.len()));
+    stage(&format!(
+        "Inferring a shape from {} events…",
+        payloads.len()
+    ));
     let inferring = crate::logging::Timed::start(
         cat::SCHEMA,
-        format!("inferring a shape for {} from {} events", identity.schema_name(), payloads.len()),
+        format!(
+            "inferring a shape for {} from {} events",
+            identity.schema_name(),
+            payloads.len()
+        ),
     );
     let detail = crate::schema::infer::infer_payload_schema(&payloads);
     let content = model::document_with_detail(&identity, detail);
@@ -1070,7 +1102,10 @@ mod tests {
             vec!["/just-this-one".to_string()],
         );
         // A blank choice is not a choice.
-        assert_eq!(resolve_log_groups(&env, Some("  ".into())).unwrap().len(), 2);
+        assert_eq!(
+            resolve_log_groups(&env, Some("  ".into())).unwrap().len(),
+            2
+        );
     }
 
     #[test]
@@ -1101,10 +1136,7 @@ mod tests {
                 }
             }}
         });
-        assert_eq!(
-            detail_type_name(&document, Some("Other")).unwrap(),
-            "Other"
-        );
+        assert_eq!(detail_type_name(&document, Some("Other")).unwrap(), "Other");
         // A blank override falls through rather than being taken literally.
         assert_eq!(detail_type_name(&document, Some("  ")).unwrap(), "Payload");
     }
@@ -1174,7 +1206,10 @@ mod tests {
 
     #[test]
     fn reports_no_traffic_when_nothing_matches() {
-        assert_eq!(matched_key("orders-api@order-assigned", &["other@thing"]), None);
+        assert_eq!(
+            matched_key("orders-api@order-assigned", &["other@thing"]),
+            None
+        );
     }
 
     #[test]
@@ -1226,8 +1261,9 @@ pub async fn issues_for_schemas(
     let minutes = minutes.unwrap_or(60 * 24).max(1);
 
     let now = crate::events_cache::now_ms();
-    let start_time =
-        (time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes)).unix_timestamp() * 1000;
+    let start_time = (time::OffsetDateTime::now_utc() - time::Duration::minutes(minutes))
+        .unix_timestamp()
+        * 1000;
 
     // Concurrent describes, same reasoning as the registry report: the calls
     // are independent and the latency is the whole cost.

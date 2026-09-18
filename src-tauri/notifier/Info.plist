@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>dev.codenaked.pontifex.notify</string>
+  <key>CFBundleName</key><string>Pontifex</string>
+  <key>CFBundleDisplayName</key><string>Pontifex</string>
+  <key>CFBundleExecutable</key><string>notifier</string>
+  <key>CFBundleIconFile</key><string>icon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleVersion</key><string>NOTIFIER_VERSION</string>
+  <key>CFBundleShortVersionString</key><string>NOTIFIER_VERSION</string>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>LSUIElement</key><true/>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSUserNotificationsUsageDescription</key><string>Pontifex tells you when a watched event goes past on the bus.</string>
+</dict></plist>

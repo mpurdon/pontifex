@@ -4,6 +4,7 @@ import {
   Braces,
   ClipboardList,
   GitFork,
+  Radar,
   ScrollText,
   Settings as SettingsIcon,
   Sparkles,
@@ -13,11 +14,14 @@ import * as ipc from '@/lib/ipc'
 import { Badge, Select, Spinner, cn } from '@/components/ui'
 import { useSettings } from './settings-context'
 import { useLoginForEnvironment } from './login-dialog'
+import { useWatchEvents, useWatchStatuses } from '@/features/watch/use-watch-events'
+import { IdleWatchGuard } from '@/features/watch/idle-guard'
 
 const NAV = [
   { to: '/schemas', label: 'Schemas', icon: Braces },
   { to: '/generate', label: 'Generate', icon: Sparkles },
   { to: '/logs', label: 'Logs', icon: ScrollText },
+  { to: '/watch', label: 'Watch', icon: Radar },
   { to: '/report', label: 'Health', icon: ClipboardList },
   { to: '/topology', label: 'Topology', icon: GitFork },
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
@@ -121,9 +125,22 @@ function EnvironmentPicker() {
   )
 }
 
+/**
+ * Unread hits across every environment, for the nav badge.
+ *
+ * Every environment, not just the active one: a watch on prd should be able
+ * to get your attention while you are working in dev.
+ */
+function useUnreadHits(): number {
+  const { data } = useWatchStatuses()
+  return data?.reduce((n, s) => n + s.unread, 0) ?? 0
+}
+
 export function Shell() {
   const { isLoading, activeEnvironment, settings } = useSettings()
   const nav = settings?.developerMode ? [...NAV, DEV_NAV] : NAV
+  useWatchEvents()
+  const unread = useUnreadHits()
 
   if (isLoading) {
     return (
@@ -152,6 +169,14 @@ export function Shell() {
             >
               <Icon className="size-3.5" />
               {label}
+              {to === '/watch' && unread > 0 && (
+                <span
+                  className="rounded-full bg-accent px-1.5 text-[10px] font-medium leading-4 text-surface-0"
+                  title={`${unread} unread hit${unread === 1 ? '' : 's'}`}
+                >
+                  {unread > 99 ? '99+' : unread}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
@@ -173,6 +198,7 @@ export function Shell() {
       <main className="min-h-0 flex-1 overflow-hidden">
         <Outlet />
       </main>
+      <IdleWatchGuard />
     </div>
   )
 }

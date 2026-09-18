@@ -56,6 +56,17 @@ impl Environment {
         }
     }
 
+    /// The log group carrying the bus's own events, as opposed to the one for
+    /// events arriving over the bridge — by the naming `for_stage` uses, with
+    /// the first group as the fallback for environments named by hand.
+    pub fn bus_log_group(&self) -> Option<&str> {
+        self.log_groups
+            .iter()
+            .find(|g| g.contains("global-events"))
+            .or(self.log_groups.first())
+            .map(String::as_str)
+    }
+
     /// True when writes to this environment should require extra confirmation.
     /// Mirrors the `CONFIRM_CLEAR_PRODUCTION` guard in the repo's clearSchemas.js.
     pub fn is_protected(&self) -> bool {
@@ -257,10 +268,8 @@ pub struct JiraSettings {
     /// Stored as the JSON Jira wants (`{"id": "10500"}`, a bare string, an
     /// array), because that is what varies per field type.
     #[serde(default)]
-    pub field_defaults: std::collections::BTreeMap<
-        String,
-        std::collections::BTreeMap<String, serde_json::Value>,
-    >,
+    pub field_defaults:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 fn default_callback_url() -> String {
@@ -385,18 +394,33 @@ pub fn load(app_config_dir: &Path) -> Result<Option<Settings>> {
         return Ok(None);
     }
     let raw = std::fs::read_to_string(&path)?;
-    let settings = serde_json::from_str(&raw)
-        .map_err(|e| Error::Internal(format!("settings.json is corrupt ({e}); delete {} to reset", path.display())))?;
+    let settings = serde_json::from_str(&raw).map_err(|e| {
+        Error::Internal(format!(
+            "settings.json is corrupt ({e}); delete {} to reset",
+            path.display()
+        ))
+    })?;
     Ok(Some(settings))
 }
 
 pub fn save(app_config_dir: &Path, settings: &Settings) -> Result<()> {
-    std::fs::create_dir_all(app_config_dir)?;
-    let path = settings_path(app_config_dir);
-    // Write-then-rename so a crash mid-write cannot leave a truncated file.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_string_pretty(settings)?)?;
-    std::fs::rename(&tmp, &path)?;
+    write_json_atomic(&settings_path(app_config_dir), settings)
+}
+
+/// Write a JSON document so a crash mid-write cannot leave a truncated file:
+/// to a sibling temp file first, then renamed into place. Creates the parent
+/// directory. The one way every on-disk record in the app is written.
+pub fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // A temp name unique to this write: two writers of the same file at once
+    // (two pollers persisting the watch store) must not share one.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.{}.{seq}.tmp", std::process::id()));
+    std::fs::write(&tmp, serde_json::to_string_pretty(value)?)?;
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 
@@ -585,9 +609,15 @@ mod tests {
         // to be clamped by literals at the call site, so raising a ceiling here
         // left those paths silently capped at the old value.
         let settings = ScanSettings::default();
-        assert_eq!(settings.seconds_or(Some(100_000)), ScanSettings::MAX_SECONDS);
+        assert_eq!(
+            settings.seconds_or(Some(100_000)),
+            ScanSettings::MAX_SECONDS
+        );
         assert_eq!(settings.seconds_or(Some(0)), ScanSettings::MIN_SECONDS);
-        assert_eq!(settings.events_or(Some(10_000_000)), ScanSettings::MAX_EVENTS);
+        assert_eq!(
+            settings.events_or(Some(10_000_000)),
+            ScanSettings::MAX_EVENTS
+        );
         assert_eq!(settings.events_or(Some(1)), ScanSettings::MIN_EVENTS);
         // A sane override passes through untouched.
         assert_eq!(settings.seconds_or(Some(45)), 45);
@@ -630,7 +660,10 @@ mod tests {
     #[test]
     fn an_environment_with_neither_says_so() {
         let env = env_with(None, "   ");
-        let message = env_with(None, "").credential_source().unwrap_err().to_string();
+        let message = env_with(None, "")
+            .credential_source()
+            .unwrap_err()
+            .to_string();
         assert!(message.contains("no AWS profile or SSO account"));
         assert!(env.credential_source().is_err());
     }
@@ -640,8 +673,12 @@ mod tests {
         let env = Environment::for_stage("dev", "some-profile");
         assert_eq!(env.registry_name, "dev-global-registry");
         assert_eq!(env.region, "us-east-2");
-        assert!(env.log_groups.contains(&"/aws/events/dev-global-events".to_string()));
-        assert!(env.log_groups.contains(&"/aws/events/dev-external-events".to_string()));
+        assert!(env
+            .log_groups
+            .contains(&"/aws/events/dev-global-events".to_string()));
+        assert!(env
+            .log_groups
+            .contains(&"/aws/events/dev-external-events".to_string()));
         assert!(!env.is_protected());
     }
 

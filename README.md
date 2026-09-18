@@ -25,6 +25,7 @@ Companion to `~/Projects/trajector/global-event-bus`.
 | **Schemas**  | Every schema in the registry, grouped by event source and fuzzy-filterable. Structured tree editor plus raw JSON, live validation, version history, diff-vs-live and diff-vs-version, register/delete. |
 | **Generate** | Describe an event in plain English and get a conforming schema back from Bedrock. Also refactors and explains existing schemas. Output is always a validated draft you must save.    |
 | **Logs**     | CloudWatch view of the `/aws/events/*` groups, filtered by source and detail-type (or a raw filter pattern), with expandable event payloads.                                         |
+| **Watch**    | Passive, all-day listening. Define what to watch for — a source, a detail type, a payload field like `detail.clientId = abc-123` — and get a desktop notification and a hit log when it goes past. |
 | **Health**   | Every schema in the registry graded against real traffic in one pass — failing, drifting, healthy, or unseen — plus event types on the bus with no schema at all.                     |
 | **Topology** | What `stacks/busConfiguration.ts` declares versus what is actually deployed, with rules, targets and drift in both directions.                                                       |
 | **Settings** | AWS profiles with live status and SSO sign-in, per-stage environments, registry discovery, Bedrock model catalog.                                                                    |
@@ -386,6 +387,123 @@ view.
 Panels are resizable, and the sizes are saved per layout in settings. In the
 schema list, hovering a source reveals a **pin** — pinned sources sort to the
 top so whatever you are working on stays reachable in a list of hundreds.
+
+## Watch mode
+
+**Watch** sits on the bus all day and says when something you care about goes
+past. A watch is any mix of a source, a detail type, and payload conditions —
+`clientPortal-*` with `client.portal.page_load`, say, or `detail.clientId =
+abc-123` on its own — or a complete CloudWatch filter pattern if you would
+rather write it yourself. A hit is recorded in the Watch screen, badged on the
+nav and the dock, and (per watch) raised as a desktop notification.
+
+It is passive by construction. The bus already writes every event to its
+`/aws/events/*` log group through a catch-all rule, so watching is nothing more
+than `FilterLogEvents` on a timer with a moving cursor. No rule, queue or
+target is created, the Topology view stays clean, and your laptop's share of
+the work is one small HTTP call per interval.
+
+- **Matching happens server-side.** The watch compiles to a filter pattern and
+  CloudWatch evaluates it, so only events that matched are ever downloaded.
+  Several watches on one log group fold into a single `||` pattern and one
+  call, then a local pass works out which of them each event satisfied.
+- **Each pass reads only what is new.** The cursor advances every poll, with a
+  short overlap because CloudWatch ingests late; hits are de-duplicated by event
+  id. Over a day it scans roughly one day of the group's ingest, once — cents.
+- **Failure is routine and handled.** An expired SSO token parks the poller
+  with one notification; signing back in wakes it at once. One watch whose
+  call fails — a raw pattern with a typo, a deleted log group — is named in
+  the status while the others keep matching. Anything else backs off
+  exponentially and keeps trying. A laptop that slept resumes from its
+  cursor, capped at an hour of backlog so a night away does not replay
+  overnight traffic on wake; a read cut short by the page cap continues from
+  where it got to.
+- **It survives restarts, and the window.** Watches, hits and the cursor live
+  in `watches.json` next to settings, and an environment left watching starts
+  watching again on launch. Closing the window while something is being
+  watched hides it instead of quitting — click the Dock icon to bring it back,
+  or quit from the menu to actually stop.
+- **Arming fills in the last hour.** The first pass looks back an hour and
+  records what it finds as *earlier* hits, so a watch on a bursty source shows
+  what it would have caught instead of an empty table that could mean anything.
+  Those hits never notify; they are context, not news.
+- **Every watch shows its own activity** — hit count and how long since the
+  last one — so "quiet" and "never fires" are distinguishable at a glance.
+
+Two checks live in the editor and toolbar so a real hit is not the first test
+of anything:
+
+- **Probe the last 24h** samples the day with the compiled pattern, spread
+  across the whole window, and reports how many events matched, at what rate,
+  when the last one was, and which types they were. Zero over a day means
+  widen or re-spell the watch; hundreds means narrow it before it notifies.
+- **Test notification** raises one on demand, so you know this machine shows
+  them before you walk away, and reports which route delivered it.
+
+Notifications go through a small helper app rather than the Tauri plugin.
+On macOS 26 the old `NSUserNotificationCenter` route — which the plugin,
+`terminal-notifier` and `osascript display notification` all use — reports
+success and shows nothing. The modern API works, but only from a real app
+bundle with its own identifier, which a `tauri dev` binary is not. So
+`src-tauri/notifier/main.swift` is built into `Pontifex Notifier.app` (by
+`scripts/build-notifier.sh`, run before `tauri dev` and `tauri build`),
+shipped as a bundle resource, installed into the app's data folder on launch,
+and launched through LaunchServices with the text as arguments. It posts one
+notification and exits; clicking the notification brings Pontifex forward.
+
+The first notification makes macOS ask whether Pontifex may notify you. The
+prompt appears at the top right of the **main** display. Answer it promptly:
+macOS withdraws an unanswered request after a few minutes and records the
+app as refused, after which the only way back is System Settings →
+Notifications → Pontifex — which the Test button offers to open. When the
+refused entry is not listed there at all, **Ask again** reinstalls the helper
+under a fresh identifier so macOS raises the prompt afresh. **Test notification** reports what the helper saw:
+delivered, waiting for permission, turned off in System Settings, or failed.
+
+The hit list is built for scanning rather than reading:
+
+- **Each watch has a colour.** Auto assigns a distinct one by position; pick
+  one from the palette or any colour at all; or keep the default badge. Hits
+  carry the colour as a stripe and on the watch badge.
+- **The countdown is a button.** "next in 8s" turns orange, reads "Poll now"
+  on hover, and clicking it polls immediately and restarts the interval.
+  Hovering the poll and hit counts shows how many events were fetched in total
+  to produce them.
+- **An effort gauge** sits in the Watches header — light, moderate, heavy —
+  and its tooltip says why: calls per poll, how long the last one took, how
+  much was fetched versus kept, and whether any watch is unfiltered. An
+  unfiltered watch downloads the whole group every poll; that is what "heavy"
+  usually means.
+- **Each hit links to its schema**, or, when the type has none registered,
+  offers to draft one. The draft samples the two minutes around the hit in
+  the hit's own log group, so it comes back in a second or two rather than
+  scanning a day; the Health report is where the wide analysis lives.
+- **Signing in clears everything at once.** A paused poller retries the
+  moment credentials arrive, so the "sign in to resume" state does not linger
+  for a minute after you have.
+- **Session rules** run across the list where watching started and stopped,
+  with the hit count and duration of each session, and the rule you would
+  reach next stays pinned to the bottom edge until you scroll to it. They
+  live as long as their session's hits do.
+- **An idle check** keeps unattended watching honest. With nobody touching
+  the app for the configured time (four hours by default; hits arriving do
+  not count), the window comes forward and asks whether to keep watching,
+  with continue-for-1h/4h/8h choices; no answer within five minutes stops
+  every watch, which the session rules then show.
+- **Clear hits** is a menu: everything, or one watch's. The editor has the
+  same for the watch being edited, and a pause toggle in its header that takes
+  effect immediately, independent of Save.
+
+Conditions use paths from the envelope root (`detail.clientId`,
+`detail.items[0].id`). Unquoted numbers compare numerically, `*` is a wildcard
+inside strings, and wrapping a value in quotes forces a string match — the same
+rules CloudWatch applies. A notification names the event and the fields the
+watch was keyed on, so a `clientId` watch shows the id without opening the app.
+
+Expect ten to thirty seconds from `put-events` to a notification: a few
+seconds for EventBridge to deliver to CloudWatch, plus up to one poll interval.
+If you ever need sub-second, the answer is a rule targeting a queue — a bus
+change, and deliberately not what this does.
 
 ## Schema validation
 

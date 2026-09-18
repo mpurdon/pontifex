@@ -2,7 +2,8 @@ import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { ReactNode } from 'react'
-import { AlertTriangle, CheckCircle2, Info, Loader2, XCircle } from 'lucide-react'
+import { useState } from 'react'
+import { AlertTriangle, Check, CheckCircle2, Copy, Info, Loader2, XCircle } from 'lucide-react'
 import type { Finding, IpcError, Severity } from '@/lib/types'
 
 export function cn(...inputs: ClassValue[]) {
@@ -436,6 +437,32 @@ export function Marked({ text }: { text: string }) {
         ),
       )}
     </>
+  )
+}
+
+/**
+ * Copy `text` to the clipboard, with a moment of confirmation.
+ *
+ * Stops the click from reaching the row behind it, since the rows it sits in
+ * toggle open on click and copying should not do that.
+ */
+export function CopyButton({ text, title = 'Copy' }: { text: string; title?: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      title={title}
+      onClick={(e) => {
+        e.stopPropagation()
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1500)
+        })
+      }}
+    >
+      {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+    </Button>
   )
 }
 

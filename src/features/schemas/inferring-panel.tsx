@@ -61,9 +61,9 @@ export function InferringPanel({
           {inferring ? (
             <>
               The events are already fetched and shaping them takes milliseconds,
-              so this is not the event bus. The backend most likely restarted
-              mid-call — which happens on every rebuild in development. Cancel
-              and try again.
+              so this is not the event bus. Cancel and try again; if it keeps
+              happening, the application log under Developer will say whether
+              the call ever finished.
             </>
           ) : reachedAws ? (
             <>

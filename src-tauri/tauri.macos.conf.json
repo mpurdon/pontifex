@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": [
+      "notifier/build/Pontifex Notifier.app"
+    ]
+  }
+}

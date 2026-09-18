@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Braces, Download, Plus, RefreshCw, Upload } from 'lucide-react'
@@ -65,45 +65,74 @@ export function SchemasPage() {
    * traffic, so the draft opens already describing what is really being sent.
    */
   const draftRequest = searchParams.get('draft')
-  const inferDraft = useMutation<InferredDraft, IpcError, string>({
-    mutationFn: (name) => {
-      const [source, ...rest] = name.split('@')
-      const minutes = Number(searchParams.get('minutes')) || undefined
-      return ipc.draftFromEvents(source, rest.join('@'), envId, minutes)
-    },
-    onSuccess: (draft) => {
-      setSelected(null)
-      setPendingDraft({
-        name: draft.name,
-        content: draft.content,
-        fileName: draft.fileName,
-        validation: draft.validation,
-      })
-      setInferredFrom(draft)
-    },
-    onSettled: () => {
-      // Free the request so the same event type can be drafted again later.
-      inferRef.current = null
-    },
-  })
-
   const [inferredFrom, setInferredFrom] = useState<InferredDraft | null>(null)
+  /** The event type being inferred right now, or null. Gates the progress panel. */
+  const [inferring, setInferring] = useState<string | null>(null)
+  const [inferError, setInferError] = useState<IpcError | null>(null)
   /** The `?draft=` value already acted on, so a re-render cannot re-fire it. */
   const inferRef = useRef<string | null>(null)
+  /**
+   * Which request may still apply its result. Cancel clears it, so a call
+   * that comes back afterwards is dropped rather than opening a draft nobody
+   * asked for any more.
+   */
+  const activeRef = useRef<symbol | null>(null)
 
   useEffect(() => {
     if (!draftRequest || !envId || inferRef.current === draftRequest) return
     inferRef.current = draftRequest
-    // Consume the parameter *before* starting the call, not after it settles.
-    //
-    // `?draft=` is a one-shot command. Leaving it in the URL for the duration
-    // meant any re-render that got past the guard could start the call again,
-    // and each restart reset `isPending` before it had rendered false — so the
-    // spinner never unmounted and its elapsed counter ran on, long past the
-    // 60s timeout, while the backend had in fact answered in 8ms.
+
+    // Read the companions before the parameters are consumed below.
+    const [source, ...rest] = draftRequest.split('@')
+    const minutes = Number(searchParams.get('minutes')) || undefined
+    // `group` names the log group the requester saw the type in; the Watch
+    // screen passes it so the draft reads one group instead of all of them.
+    const logGroup = searchParams.get('group') || undefined
+    // `around` is the hit's own timestamp, so the sample is the two minutes
+    // around an event known to exist rather than a day's scan.
+    const aroundMs = Number(searchParams.get('around')) || undefined
+
+    // Consume the parameter *before* starting the call, not after it settles:
+    // `?draft=` is a one-shot command, and leaving it in the URL let any
+    // re-render that got past the guard start the call again.
     setSearchParams({}, { replace: true })
-    inferDraft.mutate(draftRequest)
-  }, [draftRequest, envId, inferDraft, setSearchParams])
+
+    // Deliberately a plain promise with local state rather than `useMutation`.
+    // React's development double-mount unsubscribes and re-subscribes the
+    // mutation observer, and TanStack detaches an unsubscribed observer from
+    // its in-flight mutation without re-attaching it — so a mutation started
+    // in a mount effect finished in milliseconds while `isPending` stayed
+    // true forever and the spinner counted on. A promise has no observer to
+    // lose.
+    const token = Symbol(draftRequest)
+    activeRef.current = token
+    setInferring(draftRequest)
+    setInferError(null)
+    ipc
+      .draftFromEvents(source, rest.join('@'), envId, minutes, logGroup, aroundMs)
+      .then((draft) => {
+        if (activeRef.current !== token) return
+        setSelected(null)
+        setPendingDraft({
+          name: draft.name,
+          content: draft.content,
+          fileName: draft.fileName,
+          validation: draft.validation,
+        })
+        setInferredFrom(draft)
+      })
+      .catch((e: unknown) => {
+        if (activeRef.current !== token) return
+        setInferError(ipc.asIpcError(e))
+      })
+      .finally(() => {
+        if (activeRef.current !== token) return
+        activeRef.current = null
+        setInferring(null)
+        // Free the request so the same event type can be drafted again later.
+        inferRef.current = null
+      })
+  }, [draftRequest, envId, searchParams, setSearchParams, setSelected])
   const [creating, setCreating] = useState(false)
   const [transfer, setTransfer] = useState<'import' | 'export' | null>(null)
   /** An unsaved, not-yet-registered draft from the New Schema wizard. */
@@ -208,18 +237,20 @@ export function SchemasPage() {
       <ResizeHandle />
 
       <ResizablePanel id="detail" defaultSize="78" minSize="30" className="flex flex-col">
-        {inferDraft.isPending ? (
+        {inferring ? (
           <InferringPanel
-            schemaName={inferDraft.variables ?? ''}
+            schemaName={inferring}
             onCancel={() => {
-              inferDraft.reset()
+              // The call itself cannot be aborted; its result is simply dropped.
+              activeRef.current = null
               inferRef.current = null
+              setInferring(null)
               setSearchParams({}, { replace: true })
             }}
           />
-        ) : inferDraft.isError ? (
+        ) : inferError ? (
           <div className="p-3">
-            <ErrorBox error={inferDraft.error} {...credentials} />
+            <ErrorBox error={inferError} {...credentials} />
           </div>
         ) : pendingDraft ? (
           <PendingDraftPanel

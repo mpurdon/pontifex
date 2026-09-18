@@ -874,3 +874,128 @@ export interface SchemaIssues {
   note: string | null
   error: IpcError | null
 }
+
+// --- watch mode -----------------------------------------------------------
+
+export type WatchOp = 'eq' | 'ne'
+
+/** One `field = value` test on the event envelope. */
+export interface WatchCondition {
+  /** Dotted path from the envelope root, e.g. `detail.clientId`. */
+  path: string
+  op: WatchOp
+  /** Unquoted numbers compare numerically; `*` is a wildcard; quotes force a string. */
+  value: string
+}
+
+/** Something the passive poller should say when it goes past. */
+export interface Watch {
+  id: string
+  envId: string
+  label: string
+  enabled: boolean
+  /** Which of the environment's log groups to poll. `null` = its bus events group. */
+  logGroup: string | null
+  source: string | null
+  detailType: string | null
+  conditions: WatchCondition[]
+  /** A complete CloudWatch filter pattern; overrides the structured fields. */
+  rawPattern: string | null
+  /** Raise a desktop notification on a hit. */
+  notify: boolean
+  /** A CSS colour for this watch's hits; `null` picks a stable one from the palette; `'default'` is the plain badge. */
+  color: string | null
+}
+
+/** What the editor shows about a watch as it is typed. */
+export interface CompiledWatch {
+  /** The CloudWatch filter pattern; `null` matches everything. */
+  pattern: string | null
+  /** The one-line description the backend uses as the label fallback. */
+  summary: string
+}
+
+export type NotifierStatus = 'delivered' | 'denied' | 'error' | 'timeout' | 'pending'
+
+/** What the notification helper reported after a test. */
+export interface NotifierOutcome {
+  /** `pending` while a permission prompt waits. */
+  status: NotifierStatus
+  message: string
+  /** Where the helper app is installed. */
+  helper: string
+}
+
+/** A moment watching started or stopped, so the hit list can show sessions as groups. */
+export interface WatchMark {
+  id: string
+  envId: string
+  kind: 'start' | 'stop'
+  /** Epoch ms. */
+  at: number
+}
+
+/** One event that satisfied a watch. */
+export interface WatchHit {
+  id: string
+  watchId: string
+  watchLabel: string
+  envId: string
+  logGroup: string
+  /** The EventBridge event id, or the CloudWatch one when the envelope had none. */
+  eventId: string
+  /** The log event's timestamp, epoch ms. */
+  timestamp: number
+  /** When the poller saw it, epoch ms. */
+  receivedAt: number
+  source: string | null
+  detailType: string | null
+  /** The full envelope as it landed in CloudWatch. */
+  event: unknown
+  /** From the look-back pass that runs on arming: context, not news. Never notified. */
+  backfill: boolean
+}
+
+/** How often a watch would have fired over recent history. */
+export interface WatchProbe {
+  hours: number
+  /** Matches found; a floor when `truncated`. */
+  count: number
+  truncated: boolean
+  lastAt: number | null
+  /** `source@detail-type` → count, most frequent first. */
+  byType: [string, number][]
+}
+
+/** What one environment's poller is doing. */
+export interface WatchStatus {
+  envId: string
+  /** Persisted intent: the poller should be running. */
+  armed: boolean
+  /** Live fact: the task exists. */
+  running: boolean
+  pollSeconds: number
+  /** Minutes without anyone touching the app before it asks whether to keep watching; 0 never asks. */
+  idleTimeoutMinutes: number
+  lastPollAt: number | null
+  nextPollAt: number | null
+  lastError: string | null
+  /** Set while parked on an auth failure. */
+  paused: string | null
+  note: string | null
+  polls: number
+  lastFetched: number
+  /** Events fetched since this poller started. */
+  fetchedTotal: number
+  /** CloudWatch calls each pass makes. */
+  callsPerPass: number
+  /** Wall-clock time of the last pass, ms. */
+  lastPassMs: number
+  /** Watches with no server-side filter at all. */
+  unfiltered: number
+  hits: number
+  unread: number
+  seenAt: number
+  /** When this poller started, epoch ms. Older hits are look-back; newer were caught live. */
+  watchingSince: number | null
+}

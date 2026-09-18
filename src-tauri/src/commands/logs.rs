@@ -110,17 +110,17 @@ pub fn identity_pattern(source: &str, detail_type: &str) -> String {
     wrap_clauses(&[source_clause(source), detail_type_clause(detail_type)])
 }
 
-fn source_clause(source: &str) -> String {
+pub(crate) fn source_clause(source: &str) -> String {
     format!("$.source = \"{}\"", escape(source))
 }
 
 /// Unquoted, despite the hyphen: CloudWatch's filter grammar rejects
 /// `$."detail-type"` outright with `Invalid character(s) in term`.
-fn detail_type_clause(detail_type: &str) -> String {
+pub(crate) fn detail_type_clause(detail_type: &str) -> String {
     format!("$.detail-type = \"{}\"", escape(detail_type))
 }
 
-fn wrap_clauses(clauses: &[String]) -> String {
+pub(crate) fn wrap_clauses(clauses: &[String]) -> String {
     format!("{{ {} }}", clauses.join(" && "))
 }
 
@@ -129,7 +129,7 @@ fn wrap_clauses(clauses: &[String]) -> String {
 /// `*` is deliberately left alone: CloudWatch treats it as a wildcard inside a
 /// quoted string value, so `orders*`, `*assigned` and `*Notification*` all work
 /// as leading/trailing/both-ends matches.
-fn escape(value: &str) -> String {
+pub(crate) fn escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 

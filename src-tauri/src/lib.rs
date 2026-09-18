@@ -10,6 +10,7 @@ pub mod events_cache;
 pub mod jira;
 mod settings;
 mod state;
+pub mod watch;
 
 use logging::cat;
 
@@ -206,6 +207,31 @@ pub fn run() {
 
             let cache_dir = app.path().app_cache_dir()?;
             app.manage(AppState::new(settings, config_dir, cache_dir));
+
+            // Put the notification helper in place now rather than at the
+            // first hit, and say so if it is missing from this build.
+            // Off the main thread: it reads two plists and, after a rebuild,
+            // copies a bundle and registers it. Nothing waits on it — the
+            // first notification installs the helper itself if need be.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = handle.state::<AppState>();
+                let generation = state.watch.notifier_generation().await;
+                let installer = handle.clone();
+                let installed = tokio::task::spawn_blocking(move || {
+                    watch::notify::ensure_installed(&installer, generation)
+                })
+                .await;
+                if let Err(e) = installed.unwrap_or_else(|e| Err(error::Error::internal(e))) {
+                    lwarn!(cat::WATCH, "notifications unavailable: {e}");
+                }
+
+                // Environments left armed last time resume on their own;
+                // that is the point of a watch that runs all day.
+                for env_id in state.watch.armed().await {
+                    state.watcher.start(&handle, &env_id).await;
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -288,7 +314,57 @@ pub fn run() {
             // topology
             commands::topology::get_topology,
             commands::topology::preview_bus_configuration,
+            // watch mode
+            commands::watch::list_watches,
+            commands::watch::save_watch,
+            commands::watch::delete_watch,
+            commands::watch::compile_watch_pattern,
+            commands::watch::set_watching,
+            commands::watch::watch_status,
+            commands::watch::set_watch_poll_seconds,
+            commands::watch::set_watch_idle_timeout,
+            commands::watch::show_main_window,
+            commands::watch::list_watch_hits,
+            commands::watch::list_watch_marks,
+            commands::watch::clear_watch_hits,
+            commands::watch::mark_watch_hits_seen,
+            commands::watch::test_notification,
+            commands::watch::open_notification_settings,
+            commands::watch::ask_notification_permission_again,
+            commands::watch::poll_now,
+            commands::watch::probe_watch,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        // Closing the window while an environment is being watched hides it
+        // instead of quitting: a watch that dies with the window is not one
+        // you can leave running all day. The Dock icon brings it back.
+        .on_window_event(|window, event| {
+            // macOS only: the Dock icon is what brings a hidden window back,
+            // and nothing else offers that, so elsewhere close means close.
+            #[cfg(not(target_os = "macos"))]
+            let _ = (window, event);
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                let armed = tauri::async_runtime::block_on(state.watch.armed());
+                if !armed.is_empty() {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    linfo!(
+                        cat::WATCH,
+                        "window hidden; still watching {}. Quit from the menu to stop.",
+                        armed.join(", ")
+                    );
+                }
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                let _ = watch::show_main_window(app);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

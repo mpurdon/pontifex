@@ -11,6 +11,7 @@ import { WorkbenchProvider } from './features/schemas/workbench-context'
 import { SchemasPage } from './features/schemas/schemas-page'
 import { AiPage } from './features/ai/ai-page'
 import { LogsPage } from './features/logs/logs-page'
+import { WatchPage } from './features/watch/watch-page'
 import { ReportPage } from './features/report/report-page'
 import { DeveloperPage } from './features/developer/developer-page'
 import { TopologyPage } from './features/topology/topology-page'
@@ -59,6 +60,11 @@ const router = createHashRouter([
         path: 'logs',
         element: <LogsPage />,
         errorElement: <RouteErrorBoundary scope="The Logs screen" />,
+      },
+      {
+        path: 'watch',
+        element: <WatchPage />,
+        errorElement: <RouteErrorBoundary scope="The Watch screen" />,
       },
       {
         path: 'report',

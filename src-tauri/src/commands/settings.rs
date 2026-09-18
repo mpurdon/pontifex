@@ -13,8 +13,13 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings> {
 /// The settings form edits a local copy and saves it wholesale, which keeps
 /// the command surface small and avoids partial-update races.
 #[tauri::command]
-pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<Settings> {
+pub async fn save_settings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    settings: Settings,
+) -> Result<Settings> {
     validate_settings(&settings)?;
+    let env_ids: Vec<String> = settings.environments.iter().map(|e| e.id.clone()).collect();
 
     // Applied before the swap so a shrunk budget takes effect on the very next
     // persist rather than one write later.
@@ -28,6 +33,13 @@ pub async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Re
 
     // Profiles or regions may have changed, so cached configs are now suspect.
     state.clients.invalidate_all().await;
+
+    // An environment that no longer exists cannot be watched; without this
+    // its poller would fail every pass forever and keep the window hiding
+    // on close.
+    for env_id in state.watch.retain_environments(&env_ids).await? {
+        state.watcher.stop(&app, &env_id).await;
+    }
 
     Ok(state.settings_snapshot().await)
 }
@@ -93,7 +105,10 @@ fn validate_settings(settings: &Settings) -> Result<()> {
 }
 
 #[tauri::command]
-pub async fn set_active_environment(state: State<'_, AppState>, env_id: String) -> Result<Settings> {
+pub async fn set_active_environment(
+    state: State<'_, AppState>,
+    env_id: String,
+) -> Result<Settings> {
     {
         let mut guard = state.settings.write().await;
         guard.environment(&env_id)?;
