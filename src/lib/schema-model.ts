@@ -863,3 +863,21 @@ export function addComponentSchema(doc: unknown, name: string): unknown {
   schemas[name] = { type: 'object', properties: {}, additionalProperties: true }
   return next
 }
+
+/**
+ * A field's dotted path as a producer would name it — `payload.matterId` —
+ * from the JSON Pointer that addresses its schema: the segments that follow
+ * each `properties`, with array items as `[]`.
+ */
+export function fieldPathFromPointer(pointer: string): string {
+  const segments = pointer.split('/').slice(1)
+  const out: string[] = []
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i] === 'properties' && i + 1 < segments.length) {
+      out.push(segments[++i].replace(/~1/g, '/').replace(/~0/g, '~'))
+    } else if (segments[i] === 'items') {
+      out.push('[]')
+    }
+  }
+  return out.join('.').replace(/\.\[\]/g, '[]')
+}

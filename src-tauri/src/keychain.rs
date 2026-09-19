@@ -29,13 +29,14 @@ impl Keychain {
     /// is involved. Every build is a new binary to the keychain, so the dialog
     /// reappears after a rebuild and this is the failure you get for
     /// dismissing it.
-    fn refused(&self, action: &str, e: keyring::Error) -> Error {
+    fn refused(&self, name: &str, action: &str, e: keyring::Error) -> Error {
         let advice = match &e {
             keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_) => format!(
-                " — macOS asks permission the first time a new build touches this item. \
-                 Try again and choose “Always Allow”. If it keeps refusing, clear the item with \
-                 `security delete-generic-password -s {}` and enter the secret again.",
-                self.service
+                " — macOS asks permission the first time a new build touches this item, and a \
+                 dismissed or denied dialog is remembered as a refusal. Open Keychain Access, find \
+                 the “{service}” item “{name}”, and under Access Control allow Pontifex — or clear it \
+                 with `security delete-generic-password -s {service} -a {name}` and enter it again.",
+                service = self.service
             ),
             _ => String::new(),
         };
@@ -47,20 +48,20 @@ impl Keychain {
         match self.entry(name)?.get_password() {
             Ok(value) => Ok(Some(value)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(self.refused("read", e)),
+            Err(e) => Err(self.refused(name, "read", e)),
         }
     }
 
     pub fn write(&self, name: &str, value: &str) -> Result<()> {
         self.entry(name)?
             .set_password(value)
-            .map_err(|e| self.refused("write to", e))
+            .map_err(|e| self.refused(name, "write to", e))
     }
 
     pub fn clear(&self, name: &str) -> Result<()> {
         match self.entry(name)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(self.refused("clear", e)),
+            Err(e) => Err(self.refused(name, "clear", e)),
         }
     }
 }

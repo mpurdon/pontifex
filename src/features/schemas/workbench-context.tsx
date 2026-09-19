@@ -1,4 +1,5 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
+import type { FilterStatus } from '@/features/report/status'
 
 interface WorkbenchValue {
   /** The schema the Schemas screen is focused on. */
@@ -10,6 +11,15 @@ interface WorkbenchValue {
   /** Whether the health report's detail charts are expanded. */
   chartsOpen: boolean
   setChartsOpen: (open: boolean) => void
+  /** The health report's window, in minutes. */
+  healthMinutes: number
+  setHealthMinutes: (minutes: number) => void
+  /** The health report's free-text filter. */
+  healthFilter: string
+  setHealthFilter: (filter: string) => void
+  /** Which statuses the health report shows; empty means all. */
+  healthStatuses: Set<FilterStatus>
+  setHealthStatuses: (update: (prev: Set<FilterStatus>) => Set<FilterStatus>) => void
 }
 
 const WorkbenchContext = createContext<WorkbenchValue | null>(null)
@@ -33,10 +43,32 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
   // Open by default: the charts are the point of the screen until you have
   // read them, after which closing them is one click.
   const [chartsOpen, setChartsOpen] = useState(true)
+  const [healthMinutes, setHealthMinutes] = useState(1440)
+  const [healthFilter, setHealthFilter] = useState('')
+  // Starts on `missing` alone: an event nobody has written a schema for is
+  // the worst thing the report can find, and opening on all 300 rows buries
+  // it. Kept here so opening a schema from the report and coming back finds
+  // the chips as you left them.
+  const [healthStatuses, setHealthStatuses] = useState<Set<FilterStatus>>(
+    () => new Set(['missing']),
+  )
 
   const value = useMemo(
-    () => ({ selected, select, analysisOpen, setAnalysisOpen, chartsOpen, setChartsOpen }),
-    [selected, analysisOpen, chartsOpen],
+    () => ({
+      selected,
+      select,
+      analysisOpen,
+      setAnalysisOpen,
+      chartsOpen,
+      setChartsOpen,
+      healthMinutes,
+      setHealthMinutes,
+      healthFilter,
+      setHealthFilter,
+      healthStatuses,
+      setHealthStatuses,
+    }),
+    [selected, analysisOpen, chartsOpen, healthMinutes, healthFilter, healthStatuses],
   )
 
   return <WorkbenchContext.Provider value={value}>{children}</WorkbenchContext.Provider>

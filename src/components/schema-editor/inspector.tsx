@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, Link2, Trash2 } from 'lucide-react'
+import { AlertTriangle, Bug, Link2, Trash2 } from 'lucide-react'
 import {
   CONSTRAINTS,
   NODE_TYPES,
@@ -104,6 +104,11 @@ export interface InspectorProps {
   onSetRefTarget: (node: SchemaNode, target: string) => void
   onRemove: (node: SchemaNode) => void
   onFollowRef: (target: string) => void
+  /**
+   * File a ticket about this field — its name, its type, its existence —
+   * for what no validator finding covers. Absent when nothing can be filed.
+   */
+  onConcern?: (node: SchemaNode) => void
 }
 
 /**
@@ -183,6 +188,7 @@ export function Inspector({
   onSetRefTarget,
   onRemove,
   onFollowRef,
+  onConcern,
 }: InspectorProps) {
   // Name and description are free text, so they commit on blur rather than on
   // every keystroke — otherwise each character would be an undo step.
@@ -235,17 +241,29 @@ export function Inspector({
             shared
           </Badge>
         )}
-        {!isRoot && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="ml-auto text-danger"
-            onClick={() => onRemove(node)}
-            title="Remove this field"
-          >
-            <Trash2 className="size-3" />
-          </Button>
-        )}
+        <span className="ml-auto flex items-center">
+          {!isRoot && onConcern && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onConcern(node)}
+              title="Raise a concern about this field with the team that owns the producer"
+            >
+              <Bug className="size-3" />
+            </Button>
+          )}
+          {!isRoot && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-danger"
+              onClick={() => onRemove(node)}
+              title="Remove this field"
+            >
+              <Trash2 className="size-3" />
+            </Button>
+          )}
+        </span>
       </div>
 
       {/* Editing through a ref changes a shared definition; saying so up front

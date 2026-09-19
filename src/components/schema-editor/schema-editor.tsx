@@ -10,6 +10,7 @@ import {
   Pencil,
   Plus,
   Trash2,
+  Bug,
 } from 'lucide-react'
 import {
   addComponentSchema,
@@ -33,7 +34,9 @@ import {
 } from '@/lib/schema-model'
 import { buildSampleEvent, putEventsCommand } from '@/lib/sample-event'
 import { stringify } from '@/lib/format'
-import type { Finding } from '@/lib/types'
+import type { Finding, TicketContext } from '@/lib/types'
+import { ConcernDialog, type ConcernSubject } from '@/features/jira/concern-dialog'
+import { fieldPathFromPointer } from '@/lib/schema-model'
 import {
   Badge,
   Button,
@@ -192,6 +195,45 @@ export function SchemaEditor({
     counts: Record<string, number>
     sampled: number
   } | null>(null)
+  /** A concern being written up, about the event type or one field. */
+  const [concern, setConcern] = useState<ConcernSubject | null>(null)
+
+  /**
+   * Where a concern files to. The schema name carries the event's identity,
+   * so a draft that is not registered yet can still name its producer.
+   */
+  const ticketContext: TicketContext | null = useMemo(() => {
+    if (!schemaName) return null
+    const at = schemaName.indexOf('@')
+    return {
+      schemaName,
+      environment: environmentLabel ?? envId ?? 'unknown',
+      registry: registryName ?? null,
+      source: at > 0 ? schemaName.slice(0, at) : schemaName,
+      detailType: at > 0 ? schemaName.slice(at + 1) : '',
+      logGroup: null,
+      minutes: null,
+      typeName: activeSchema ?? null,
+    }
+  }, [schemaName, environmentLabel, envId, registryName, activeSchema])
+
+  const raiseFieldConcern = (node: SchemaNode) => {
+    const path = fieldPathFromPointer(node.ownPointer)
+    const declared = [
+      node.refTarget ?? node.type,
+      node.format && `format ${node.format}`,
+      node.required ? 'required' : 'optional',
+      node.acceptsNull && 'nullable',
+    ]
+      .filter(Boolean)
+      .join(', ')
+    const seen = coverage?.counts[node.id]
+    const observed =
+      coverage && seen !== undefined
+        ? `present in ${seen} of ${coverage.sampled} sampled events (${Math.round((100 * seen) / Math.max(coverage.sampled, 1))}%)`
+        : null
+    setConcern({ path, label: `the field ${path}`, declared, observed })
+  }
 
   useEffect(() => {
     if (!activeSchema || !schemaNames.includes(activeSchema)) {
@@ -589,6 +631,24 @@ export function SchemaEditor({
             options={sideTabs}
             onChange={selectTab}
           />
+          {ticketContext && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto"
+              onClick={() =>
+                setConcern({
+                  path: '',
+                  label: `the event type ${ticketContext.detailType || ticketContext.schemaName}`,
+                  declared: null,
+                  observed: null,
+                })
+              }
+              title="Raise a concern about this event type — its name, its source, its shape — with the team that owns the producer"
+            >
+              <Bug className="size-3" />
+            </Button>
+          )}
         </div>
 
         {/*
@@ -601,6 +661,7 @@ export function SchemaEditor({
               <Inspector
                 node={selected}
                 schemaNames={schemaNames}
+                onConcern={ticketContext ? raiseFieldConcern : undefined}
                 sharedUsage={selected.refTarget ? usage[selected.refTarget] : undefined}
                 onFollowRef={followRef}
                 onRename={(node, name) => {
@@ -709,6 +770,15 @@ export function SchemaEditor({
             }
             setRemovingType(null)
           }}
+        />
+      )}
+
+      {ticketContext && (
+        <ConcernDialog
+          open={!!concern}
+          subject={concern}
+          context={ticketContext}
+          onClose={() => setConcern(null)}
         />
       )}
     </>

@@ -80,20 +80,21 @@ const TONE_ACTIVE: Record<StatusStyle['tone'], string> = {
  */
 export function ReportPage() {
   const { envId, activeEnvironment } = useSettings()
-  const { chartsOpen, setChartsOpen } = useWorkbench()
+  const {
+    chartsOpen,
+    setChartsOpen,
+    healthMinutes: minutes,
+    setHealthMinutes: setMinutes,
+    healthFilter: filter,
+    setHealthFilter: setFilter,
+    healthStatuses: active,
+    setHealthStatuses: setActive,
+  } = useWorkbench()
   const navigate = useNavigate()
   const credentials = useLoginForEnvironment(activeEnvironment)
 
   const queryClient = useQueryClient()
-  const [minutes, setMinutes] = useState(1440)
-  const [filter, setFilter] = useState('')
   const [progress, setProgress] = useState<string | null>(null)
-  /**
-   * Which statuses to show. Starts on `missing` alone: an event nobody has
-   * written a schema for is the worst thing the report can find, and opening
-   * on all 300 rows buries it.
-   */
-  const [active, setActive] = useState<Set<FilterStatus>>(() => new Set(['missing']))
   /** Cap warnings are informational and repetitive; dismissed per report. */
   const [dismissedNote, setDismissedNote] = useState<number | null>(null)
 
@@ -451,7 +452,7 @@ export function ReportPage() {
               {active.size > 0 && (
                 <button
                   type="button"
-                  onClick={() => setActive(new Set())}
+                  onClick={() => setActive(() => new Set())}
                   title="Clear the filter and show everything"
                   className="rounded px-1.5 py-0.5 text-[10px] text-ink-faint hover:bg-surface-2 hover:text-ink-muted"
                 >

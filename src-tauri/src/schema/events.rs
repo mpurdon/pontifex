@@ -127,6 +127,10 @@ pub enum IssueKind {
     /// The event type is on the bus and the registry has no schema for it
     /// at all. Not a disagreement with a schema — the absence of one.
     Unregistered,
+    /// Raised by a person reviewing the schema, not found by the validator:
+    /// a name that misleads, a field that should not exist, a type that is
+    /// wrong in the contract even though the events honour it.
+    Concern,
 }
 
 /// The issue an event type with no schema raises. `seen` is how many of its

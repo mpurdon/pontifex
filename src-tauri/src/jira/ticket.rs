@@ -138,6 +138,7 @@ fn kind_phrase(kind: IssueKind) -> &'static str {
         IssueKind::NeverSeen => "never sends a field the schema declares",
         IssueKind::Rejected => "sends events the schema rejects",
         IssueKind::Unregistered => "publishes an event type with no registered schema",
+        IssueKind::Concern => "publishes an event type a reviewer has asked to change",
     }
 }
 
@@ -175,16 +176,25 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
     out.push_str("h3. What is wrong\n");
     out.push_str(&format!("{}\n\n", plain(&issue.summary)));
 
-    out.push_str("h3. What to do\n");
+    // A concern is a person's words, not a validator's finding: there is no
+    // count of affected events and nothing is being rejected.
+    let concern = issue.kind == IssueKind::Concern;
+    out.push_str(if concern {
+        "h3. Details\n"
+    } else {
+        "h3. What to do\n"
+    });
     out.push_str(&format!("{}\n\n", plain(&issue.action)));
 
     out.push_str("h3. Evidence\n");
-    out.push_str(&format!(
-        "* Observed in *{} of {} sampled events* over {}\n",
-        issue.affected,
-        issue.sampled,
-        describe_window(context.minutes),
-    ));
+    if !concern {
+        out.push_str(&format!(
+            "* Observed in *{} of {} sampled events* over {}\n",
+            issue.affected,
+            issue.sampled,
+            describe_window(context.minutes),
+        ));
+    }
     out.push_str(&format!(
         "* Source: {{{{{}}}}} / detail-type {{{{{}}}}}\n",
         context.source, context.detail_type,
@@ -199,11 +209,13 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
         out.push_str(&format!("* Events carry: {{{{{observed}}}}}\n"));
     }
     // The line that decides urgency for whoever picks this up.
-    out.push_str(if issue.rejects {
-        "* *These events are being rejected by schema validation today.*\n"
-    } else {
-        "* Not currently rejected — the schema is out of date, not blocking.\n"
-    });
+    if !concern {
+        out.push_str(if issue.rejects {
+            "* *These events are being rejected by schema validation today.*\n"
+        } else {
+            "* Not currently rejected — the schema is out of date, not blocking.\n"
+        });
+    }
     if issue.kind == IssueKind::Unregistered {
         out.push_str(&format!(
             "* Schema: none registered — it would be named {{{{{}}}}}\n",
@@ -263,7 +275,11 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
         out.push_str(&format!("{{quote}}{}{{quote}}\n\n", message));
     }
 
-    out.push_str("----\nFiled from Pontifex, which sampled real events off the bus and compared them with the registered schema.\n");
+    out.push_str(if concern {
+        "----\nFiled from Pontifex by someone reviewing this schema against real events on the bus.\n"
+    } else {
+        "----\nFiled from Pontifex, which sampled real events off the bus and compared them with the registered schema.\n"
+    });
     out
 }
 

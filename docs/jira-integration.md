@@ -103,6 +103,15 @@ the registry, not only from a graded schema:
   the registry has nothing for it, with an example payload. Bulk filing
   pre-selects these along with the rejected ones — the absence is the whole
   finding.
+- **Something a person sees that the validator cannot** — a misleading
+  name, a field that should not exist, a type that fits the traffic but is
+  the wrong contract. The bug icon beside the side-panel tabs raises a
+  concern about the event type; the one beside a field's name in Details
+  raises it about that field. Two sentences are asked for, the title and the
+  detail, and the ticket goes through the same preview with the schema's
+  declaration and the field's presence in sampled events as evidence. The
+  issue kind is `concern`, keyed by path, so a second concern about the same
+  field is offered as a comment on the open ticket.
 - **A single event caught by a watch** — *Check against schema* on an
   expanded hit validates that one payload against the registered schema and
   lists what disagrees, or says there is no schema. Each problem files with

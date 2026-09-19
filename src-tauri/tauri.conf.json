@@ -4,6 +4,7 @@
   "version": "0.1.2",
   "identifier": "dev.codenaked.pontifex",
   "build": {
+    "runner": "../scripts/cargo-signed.sh",
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1428",
     "beforeDevCommand": "sh scripts/build-notifier.sh && pnpm dev",

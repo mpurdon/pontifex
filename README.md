@@ -51,6 +51,14 @@ pnpm tauri build        # produce a distributable bundle
 The dev server runs on port **1428** rather than Tauri's default 1420, so it
 does not collide with other Tauri projects.
 
+On macOS the dev binary is code-signed after every build (`scripts/cargo-signed.sh`,
+wired in as Tauri's `build.runner`) with `APPLE_SIGNING_IDENTITY` or, failing
+that, the first Developer ID Application certificate in your keychain. An
+unsigned build is a new application to the keychain every time it is rebuilt,
+so the Jira and GitHub secrets would prompt after every Rust change; signed,
+the keychain asks once — choose **Always Allow**. Without a certificate the
+build is ad-hoc signed as before.
+
 ### First run
 
 Pontifex bootstraps itself from your machine:
@@ -360,6 +368,11 @@ recursively.
 
 The draft is unsaved. Review it in the structure editor and register it like
 any other new schema — including the production diff confirmation.
+
+A concern the validator cannot raise — the event type is badly named, a field
+should not exist, a type is the wrong contract even though the traffic fits —
+can be filed from the editor: the bug icon beside the side-panel tabs is about
+the event type, the one beside a field's name in Details is about that field.
 
 Those rows can also be **filed as tickets**, selected alongside the failing and
 drifting ones: the ticket says the source publishes the type and the registry

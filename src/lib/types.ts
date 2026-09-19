@@ -492,6 +492,7 @@ export type IssueKind =
   | 'neverSeen'
   | 'rejected'
   | 'unregistered'
+  | 'concern'
 
 export type IssueSeverity = 'error' | 'warning' | 'info'
 

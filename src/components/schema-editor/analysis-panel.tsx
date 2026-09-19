@@ -671,7 +671,7 @@ function IssueRow({
               onClick={onSuggest}
               disabled={suggesting}
               title="Ask a model what to do about this, from the values real events carry"
-              className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-faint hover:bg-surface-3 hover:text-accent disabled:opacity-40"
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-muted hover:bg-surface-3 hover:text-accent disabled:opacity-40"
             >
               <Sparkles className="size-2.5" />
               {suggesting ? 'Asking…' : 'Suggest'}
@@ -691,7 +691,9 @@ function IssueRow({
                     ? 'File this with the team that owns the producer'
                     : 'Connect Jira in Settings → Jira to file this'
                 }
-                className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-faint hover:bg-surface-3 hover:text-accent disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-faint"
+                // Muted, not faint: faint is what a disabled control looks
+                // like, and an action that can be taken should not.
+                className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-muted hover:bg-surface-3 hover:text-accent disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-muted"
               >
                 <Bug className="size-2.5" />
                 File
