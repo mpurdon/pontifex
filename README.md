@@ -303,6 +303,46 @@ Running a check also annotates every field in the tree with its observed
 frequency, so `95%` and `3%` are visible at a glance. A field declared
 `required` but present in less than 100% of traffic is flagged in red.
 
+#### How severity is graded
+
+The validator alone knows one thing: whether the registered schema throws
+the events away. So on its own a problem is **rejected** (the bus drops these
+events today), **drifting** (the schema and the traffic disagree, nothing is
+rejected) or a **note** (a declared field the sample never contained). That
+says whether the contract is enforced, not whether anyone downstream cares.
+
+The origin lookup supplies the other half. Every consumer file it finds is
+read for the fields it takes off the event — `event.detail.payload.matterId`,
+`detail?.metadata.trackingId`, `detail["payload"]["matterId"]`,
+`detail.get("x")`, destructuring of the same, and the locals a handler
+unwraps the detail into first (`const d = event.detail.payload; d.matterId`)
+— and each issue is graded by who reads its field:
+
+- **read by N consumers** — somebody dereferences it, so a change here
+  breaks them. Graded as an error whatever the validator said, and the files
+  and their owners are listed under the issue. A declared field nobody sends
+  but a handler reads is raised from a note to a warning.
+- **no consumer reads it** — consumer files that read this event's fields
+  were found, and none reads this one or passes its parent along. Drift
+  here is downgraded to a note. A handler that hands `payload` whole to
+  another module might read anything inside it, so such a field keeps the
+  validator's grade and the tooltip says why.
+- **rejected** stays an error regardless: a rejected event reaches nobody,
+  every reader of every field included.
+
+A file is a reader only when it actually reads fields, so a rule
+configuration that merely subscribes does not count, and nothing is
+downgraded until at least one real handler has been found. Until then the
+panel says *graded by validation only*. The lookup is the Origin tab's to
+start — a GitHub code search for every schema opened would not do — and
+when one lands, an open analysis of that type is re-graded on the spot. The
+scan reads source text, not
+syntax: a field named in prose inside JSX, or in a rule for a different
+event type in the same file, can register as a read. Either only ever
+withholds a downgrade or lists a file that is one click away from being
+checked, never invents a rejection. A cached analysis is re-graded against
+the current lookup each time it is opened.
+
 #### Cached samples
 
 Fetched events are cached on disk, keyed by environment, log group and event
@@ -449,7 +489,9 @@ the first time.
 The origin also feeds ticket routing: Settings → Jira can map an owning team
 or repository to a project, used when no source rule matches, and a ticket for
 a type whose origin has been looked up names the publisher, the owners, and
-the pull request that first published it.
+the pull request that first published it. And it feeds severity: each
+consumer file's card lists the fields it reads off the event, which is what
+the reality check grades issues by (see *How severity is graded*).
 
 A schema's reality check is kept the same way: opening the schema again shows
 what the last Run found and how long ago, and Run re-scans when a fresher

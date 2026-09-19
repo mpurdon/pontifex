@@ -162,6 +162,11 @@ fn render_example(example: &Value) -> String {
     serde_json::to_string_pretty(example).unwrap_or_else(|_| example.to_string())
 }
 
+/// A file in a repository, as a Jira wiki link.
+fn wiki_link(repo: &str, path: &str, url: &str) -> String {
+    format!("[{repo}/{path}|{url}]")
+}
+
 /// The ticket body, in Jira wiki markup.
 pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
     let mut out = String::new();
@@ -208,13 +213,30 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
     if let Some(observed) = &issue.observed {
         out.push_str(&format!("* Events carry: {{{{{observed}}}}}\n"));
     }
-    // The line that decides urgency for whoever picks this up.
+    // The lines that decide urgency for whoever picks this up: whether the
+    // bus is throwing the events away, and who downstream reads the field.
     if !concern {
         out.push_str(if issue.rejects {
             "* *These events are being rejected by schema validation today.*\n"
         } else {
             "* Not currently rejected — the schema is out of date, not blocking.\n"
         });
+        if let Some(impact) = &issue.impact {
+            out.push_str(&match (impact.readers.len(), impact.indirect.len()) {
+                (0, 0) => format!(
+                    "* None of the {} consumer file(s) found reads this field.\n",
+                    impact.handlers
+                ),
+                (0, n) => format!(
+                    "* {n} of the {} consumer file(s) found pass this field's parent along whole, so whether they read it is not visible — listed below.\n",
+                    impact.handlers
+                ),
+                (n, _) => format!(
+                    "* *Read by {n} of the {} consumer file(s) found — listed below.*\n",
+                    impact.handlers
+                ),
+            });
+        }
     }
     if issue.kind == IssueKind::Unregistered {
         out.push_str(&format!(
@@ -247,8 +269,8 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
             "h3. Where it appears\n"
         });
         out.push_str(&format!(
-            "* [{}/{}|{}]\n",
-            origin.repo, origin.path, origin.url
+            "* {}\n",
+            wiki_link(&origin.repo, &origin.path, &origin.url)
         ));
         if !origin.owners.is_empty() {
             out.push_str(&format!("* Owned by {}\n", origin.owners.join(", ")));
@@ -260,6 +282,33 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
             }
         }
         out.push('\n');
+    }
+
+    if let Some(impact) = &issue.impact {
+        for (heading, files) in [
+            ("h3. Consumers that read this field\n", &impact.readers),
+            (
+                "h3. Consumers that pass its parent along\n",
+                &impact.indirect,
+            ),
+        ] {
+            if files.is_empty() {
+                continue;
+            }
+            out.push_str(heading);
+            for file in files {
+                out.push_str(&format!(
+                    "* {}{}\n",
+                    wiki_link(&file.repo, &file.path, &file.url),
+                    if file.owners.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {}", file.owners.join(", "))
+                    }
+                ));
+            }
+            out.push('\n');
+        }
     }
 
     if let Some(example) = &issue.example {
@@ -392,6 +441,7 @@ mod tests {
             fix: Some(crate::schema::repair::Repair::WidenType {
                 types: vec!["integer".into(), "string".into()],
             }),
+            impact: None,
         }
     }
 
@@ -470,6 +520,52 @@ mod tests {
         };
         let body = render_description(&drifting, &context());
         assert!(body.contains("not blocking"), "{body}");
+    }
+
+    #[test]
+    fn the_body_names_the_consumers_that_read_the_field() {
+        use crate::origin::impact::{Impact, Reader};
+        let read = Issue {
+            impact: Some(Impact {
+                handlers: 3,
+                indirect: vec![],
+                readers: vec![Reader {
+                    repo: "org/billing".into(),
+                    path: "src/handler.ts".into(),
+                    url: "https://github.com/org/billing/blob/main/src/handler.ts".into(),
+                    owners: vec!["@org/billing".into()],
+                }],
+            }),
+            ..issue()
+        };
+        let body = render_description(&read, &context());
+        assert!(
+            body.contains("Read by 1 of the 3 consumer file(s)"),
+            "{body}"
+        );
+        assert!(
+            body.contains("h3. Consumers that read this field"),
+            "{body}"
+        );
+        assert!(
+            body.contains("[org/billing/src/handler.ts|https://github.com/org/billing/blob/main/src/handler.ts] — @org/billing"),
+            "{body}"
+        );
+
+        let unread = Issue {
+            impact: Some(Impact {
+                handlers: 3,
+                readers: vec![],
+                indirect: vec![],
+            }),
+            ..issue()
+        };
+        let body = render_description(&unread, &context());
+        assert!(
+            body.contains("None of the 3 consumer file(s) found reads this field"),
+            "{body}"
+        );
+        assert!(!body.contains("h3. Consumers"), "{body}");
     }
 
     #[test]

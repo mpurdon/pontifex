@@ -496,6 +496,26 @@ export type IssueKind =
 
 export type IssueSeverity = 'error' | 'warning' | 'info'
 
+/** A consumer file, as much of it as an issue needs to name it. */
+export type Reader = Pick<ProducerOrigin, 'repo' | 'path' | 'url' | 'owners'>
+
+/**
+ * What the consumers found say about an issue. Present only once the origin
+ * lookup has found a file reading fields off the event; absent, the severity
+ * is the validator's alone.
+ */
+export interface Impact {
+  /** Consumer files found reading fields off this event at all. */
+  handlers: number
+  /** The ones that read this field, or something inside it. */
+  readers: Reader[]
+  /**
+   * The ones that take an ancestor of the field along whole, so may read it
+   * where the scan cannot see. Withholds "nobody reads it".
+   */
+  indirect: Reader[]
+}
+
 /**
  * One disagreement between a schema and its traffic.
  *
@@ -531,6 +551,12 @@ export interface Issue {
    * summary text would.
    */
   fix?: Repair
+  /**
+   * Who reads this field, and what `severity` was graded by above the
+   * validator's floor. Absent until the origin lookup has found a consumer
+   * that reads fields off the event.
+   */
+  impact?: Impact
 }
 
 /**
@@ -1067,6 +1093,8 @@ export interface ProducerOrigin {
   incidental: boolean
   /** What the file does with the event type. */
   role: 'publisher' | 'consumer' | 'mention'
+  /** Fields it reads off the event detail, as dotted paths. */
+  reads: string[]
 }
 
 export interface GithubOutcome {

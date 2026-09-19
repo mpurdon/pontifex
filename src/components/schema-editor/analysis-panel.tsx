@@ -14,14 +14,14 @@ import {
   Wand2,
   XCircle,
 } from 'lucide-react'
+import { listen } from '@tauri-apps/api/event'
 import * as ipc from '@/lib/ipc'
-import { KIND_LABELS } from '@/lib/issues'
+import { KIND_LABELS, SEVERITY_TONE, describeSeverity } from '@/lib/issues'
 import type {
   FieldObservation,
   FiledTicket,
   IpcError,
   Issue,
-  IssueKind,
   IssueSeverity,
   RealityCheckResult,
   Repair,
@@ -42,6 +42,7 @@ import {
 import { WINDOWS, formatAge } from '@/lib/format'
 import { examplesFor, repairLabel } from '@/lib/repair'
 import { FileTicketDialog, FiledChip } from '@/features/jira/file-ticket-dialog'
+import { RepoFileLink } from '@/features/origin/origin-panel'
 
 /**
  * A value as evidence, quoted the way JSON would write it.
@@ -193,6 +194,29 @@ export function AnalysisPanel({
   // sit in the dependency list without re-arming the timer every render.
   const recheckNow = recheck.mutate
 
+  /**
+   * A lookup landing for this type re-grades the list: the backend grades
+   * from its own cache of the origin, so a re-check against the cached
+   * sample picks the new grade up. The search itself is the Origin tab's to
+   * start — a GitHub code search per schema opened would not do.
+   */
+  const source = result?.source
+  const detailType = result?.detailType
+  useEffect(() => {
+    if (!hasSample) return
+    const unlisten = listen<{ source: string; detailType: string }>(
+      'origin://updated',
+      (event) => {
+        if (event.payload.source === source && event.payload.detailType === detailType) {
+          recheckNow()
+        }
+      },
+    )
+    return () => {
+      void unlisten.then((fn) => fn())
+    }
+  }, [hasSample, source, detailType, recheckNow])
+
   useEffect(() => {
     if (!live || !hasSample || !active) return
     const timer = setTimeout(() => recheckNow(), 400)
@@ -262,9 +286,11 @@ export function AnalysisPanel({
 
   // Memoised on the result: `document` changes on every keystroke while the
   // panel sits mounted behind the other tabs, and none of this depends on it.
-  const { topLevelUndeclared, actionable } = useMemo(() => {
+  const { topLevelUndeclared, actionable, handlers } = useMemo(() => {
     const undeclared = result?.drift.undeclared ?? []
     return {
+      /** How many consumer files the grade rests on; none means validation only. */
+      handlers: result?.issues.find((i) => i.impact)?.impact?.handlers ?? 0,
       // The bulk apply is top-level only — `suggest_additions` skips nested
       // paths, so offering them here would silently drop them. The per-row
       // repair below has no such limit.
@@ -310,6 +336,30 @@ export function AnalysisPanel({
         typeName: result.typeName,
       }
     : null
+
+  /** Everything a row needs, so a grouped row and a lone one get the same. */
+  const rowProps = (issue: Issue): RowProps => ({
+    issue,
+    // Nested paths included: the backend walks the ref graph to find
+    // whichever type owns `metadata.trackingId`. Only a bare array element
+    // has no property to repair, and the backend withholds the repair for
+    // those.
+    onFix: issue.fix ? () => applyRepair.mutate({ issue, repair: issue.fix! }) : undefined,
+    fixing: applyRepair.isPending,
+    suggestion: suggestions[issue.key],
+    // Only where nothing mechanical applies: the computed repairs are free
+    // and immediate, and asking a model to re-derive one would be slower
+    // and no better.
+    onSuggest:
+      !issue.fix && issue.severity !== 'info' ? () => suggest.mutate(issue) : undefined,
+    suggesting: suggest.isPending && suggest.variables?.key === issue.key,
+    onApplySuggestion: (repair) => applyRepair.mutate({ issue, repair }),
+    filed: filed[issue.key],
+    // Info-level rows are notes, not bugs — nobody wants a ticket saying a
+    // field was quiet this week.
+    onFile: issue.severity !== 'info' && ticketContext ? () => setFiling(issue) : undefined,
+    canFile: jira.data?.connected ?? false,
+  })
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface-0">
@@ -455,45 +505,25 @@ export function AnalysisPanel({
               />
             )}
 
+            {/* What the severities mean. Without a consumer found they are
+                the validator's alone — rejected or not — and saying so is
+                the difference between a grade and a guess. */}
+            {outstanding.length > 0 && (
+              <p className="px-1 text-[10px] text-ink-faint">
+                {handlers > 0
+                  ? `Graded by who reads each field: ${handlers} consumer file${handlers === 1 ? '' : 's'} found.`
+                  : 'Graded by validation only. Open Origin to find who consumes this event and grade by who reads each field.'}
+              </p>
+            )}
+
             <ul className="flex flex-col gap-2">
-              {outstanding.map((issue) => (
-                <IssueRow
-                  key={issue.key}
-                  issue={issue}
-                  // Nested paths included: the backend walks the ref graph to
-                  // find whichever type owns `metadata.trackingId`. Only a bare
-                  // array element has no property to repair, and the backend
-                  // withholds the repair for those.
-                  onFix={
-                    issue.fix
-                      ? () => applyRepair.mutate({ issue, repair: issue.fix! })
-                      : undefined
-                  }
-                  fixing={applyRepair.isPending}
-                  suggestion={suggestions[issue.key]}
-                  onSuggest={
-                    // Only where nothing mechanical applies: the computed
-                    // repairs are free and immediate, and asking a model to
-                    // re-derive one would be slower and no better.
-                    !issue.fix && issue.severity !== 'info'
-                      ? () => suggest.mutate(issue)
-                      : undefined
-                  }
-                  suggesting={suggest.isPending && suggest.variables?.key === issue.key}
-                  onApplySuggestion={(repair) =>
-                    applyRepair.mutate({ issue, repair })
-                  }
-                  filed={filed[issue.key]}
-                  onFile={
-                    // Info-level rows are notes, not bugs — nobody wants a
-                    // ticket saying a field was quiet this week.
-                    issue.severity !== 'info' && ticketContext
-                      ? () => setFiling(issue)
-                      : undefined
-                  }
-                  canFile={jira.data?.connected ?? false}
-                />
-              ))}
+              {groupIssues(outstanding).map((group) =>
+                group.length === 1 ? (
+                  <IssueRow key={group[0].key} {...rowProps(group[0])} />
+                ) : (
+                  <IssueGroup key={group[0].key} issues={group} rowProps={rowProps} />
+                ),
+              )}
             </ul>
 
             {actionable.length === 0 && (
@@ -574,24 +604,68 @@ const SEVERITY_STYLES: Record<
 }
 
 /**
- * One problem: what disagrees, how much traffic it affects, what to do.
+ * A field's path, wrapping at the dots rather than clipping.
  *
- * Deliberately not grouped by category. The categories overlapped — a wrong
- * type is also a rejection — so the same problem appeared twice under two
- * headings with two different frequencies, and neither said what to do.
+ * The parent is dim and the field itself is not: in a column this narrow a
+ * six-segment path is two lines, and the reader's eye wants the last word.
  */
-function IssueRow({
-  issue,
-  onFix,
-  fixing,
-  suggestion,
-  onSuggest,
-  suggesting,
-  onApplySuggestion,
-  onFile,
-  canFile,
-  filed,
-}: {
+function PathLabel({ path, leaf = false }: { path: string; leaf?: boolean }) {
+  const at = path.lastIndexOf('.')
+  const parent = at >= 0 ? path.slice(0, at + 1) : ''
+  const name = at >= 0 ? path.slice(at + 1) : path
+  return (
+    <span className="font-mono text-[11px] [overflow-wrap:anywhere]" title={path}>
+      {!leaf &&
+        parent.split(/(?<=\.)/).map((segment, i) => (
+          <span key={i} className="text-ink-faint">
+            {segment}
+            <wbr />
+          </span>
+        ))}
+      <span className="text-ink">{name}</span>
+    </span>
+  )
+}
+
+/**
+ * A sentence with the field's own path replaced by "this field", for beside
+ * a path that is already on screen: a card that names the field once is one
+ * you can scan.
+ */
+function withoutPath(text: string, path: string): string {
+  if (!path) return text
+  const stripped = text.replace(`\`${path}\``, 'this field').trim()
+  return stripped.charAt(0).toUpperCase() + stripped.slice(1)
+}
+
+/**
+ * Undeclared siblings together: an object the schema does not describe
+ * shows up as one issue per field it carries, and five cards that each say
+ * "the schema does not describe this" about `subscriptions[].something` are
+ * one finding wearing five hats. Everything else stays one to a card.
+ */
+function groupIssues(issues: Issue[]): Issue[][] {
+  const groups: Issue[][] = []
+  const byParent = new Map<string, Issue[]>()
+  for (const issue of issues) {
+    const at = issue.kind === 'undeclared' ? issue.path.lastIndexOf('.') : -1
+    if (at < 0) {
+      groups.push([issue])
+      continue
+    }
+    const parent = issue.path.slice(0, at)
+    const existing = byParent.get(parent)
+    if (existing) existing.push(issue)
+    else {
+      const group = [issue]
+      byParent.set(parent, group)
+      groups.push(group)
+    }
+  }
+  return groups
+}
+
+interface RowProps {
   issue: Issue
   /** Applies the repair the issue carries. Absent when it carries none. */
   onFix?: () => void
@@ -607,6 +681,66 @@ function IssueRow({
   /** Whether Jira is connected — the button explains itself when it is not. */
   canFile: boolean
   filed?: FiledTicket
+}
+
+/** Several undeclared fields under one parent, as one card. */
+function IssueGroup({
+  issues,
+  rowProps,
+}: {
+  issues: Issue[]
+  rowProps: (issue: Issue) => RowProps
+}) {
+  const first = issues[0]
+  const parent = first.path.slice(0, first.path.lastIndexOf('.'))
+  const worst = issues.some((i) => i.severity === 'error') ? 'error' : first.severity
+  const { border, text, icon: Icon } = SEVERITY_STYLES[worst]
+  return (
+    <li className={cn('rounded-md border bg-surface-1/40 px-2 py-1.5', border)}>
+      <div className="flex items-start gap-2">
+        <Icon className={cn('mt-0.5 size-3 shrink-0', text)} />
+        <div className="min-w-0 flex-1">
+          <PathLabel path={parent} />
+          <p className="text-[11px] leading-snug text-ink-muted">
+            carries {issues.length} fields the schema does not describe
+          </p>
+        </div>
+        <Badge tone="neutral">{KIND_LABELS.undeclared}</Badge>
+      </div>
+      <ul className="mt-1.5 flex flex-col divide-y divide-edge/60 border-t border-edge/60 pl-5">
+        {issues.map((issue) => (
+          <IssueRow key={issue.key} {...rowProps(issue)} nested />
+        ))}
+      </ul>
+    </li>
+  )
+}
+
+/**
+ * One problem: what disagrees, how much traffic it affects, what to do.
+ *
+ * Deliberately not grouped by category. The categories overlapped — a wrong
+ * type is also a rejection — so the same problem appeared twice under two
+ * headings with two different frequencies, and neither said what to do.
+ *
+ * The path leads and the sentences do not repeat it: the path is the part
+ * that was being clipped, and the part the reader is looking for.
+ */
+function IssueRow({
+  issue,
+  onFix,
+  fixing,
+  suggestion,
+  onSuggest,
+  suggesting,
+  onApplySuggestion,
+  onFile,
+  canFile,
+  filed,
+  nested = false,
+}: RowProps & {
+  /** Inside a group: no border, the parent path already shown above. */
+  nested?: boolean
 }) {
   const { border, text, icon: Icon } = SEVERITY_STYLES[issue.severity]
   // Never round a real occurrence down to 0%: one event in 224 is 0.4%, and
@@ -615,135 +749,183 @@ function IssueRow({
     issue.sampled > 0 && issue.affected > 0
       ? Math.max(1, Math.round((issue.affected / issue.sampled) * 100))
       : 0
+  const summary = withoutPath(issue.summary, issue.path)
+  const action = withoutPath(issue.action, issue.path)
+  const severity = describeSeverity(issue)
+
+  const actions = (
+    <div className="flex flex-wrap items-center justify-end gap-1">
+      {/* The repair sits beside the reason for it, and says what it will
+          do rather than "Fix" — `Redeclare as string | null` is a claim
+          you can disagree with before clicking, which "Fix" is not. */}
+      {onFix && issue.fix && (
+        <button
+          type="button"
+          onClick={onFix}
+          disabled={fixing}
+          title={`${repairLabel(issue.fix)} in the draft — reviewed as a diff, nothing is saved to AWS`}
+          className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-accent hover:bg-surface-3 disabled:opacity-40"
+        >
+          <Wand2 className="size-2.5" />
+          {repairLabel(issue.fix)}
+        </button>
+      )}
+
+      {onSuggest && !suggestion && (
+        <button
+          type="button"
+          onClick={onSuggest}
+          disabled={suggesting}
+          title="Ask a model what to do about this, from the values real events carry"
+          className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-muted hover:bg-surface-3 hover:text-accent disabled:opacity-40"
+        >
+          <Sparkles className="size-2.5" />
+          {suggesting ? 'Asking…' : 'Suggest'}
+        </button>
+      )}
+
+      {filed ? (
+        <FiledChip ticket={filed} />
+      ) : (
+        onFile && (
+          <button
+            type="button"
+            onClick={onFile}
+            disabled={!canFile}
+            title={
+              canFile
+                ? 'File this with the team that owns the producer'
+                : 'Connect Jira in Settings → Jira to file this'
+            }
+            // Muted, not faint: faint is what a disabled control looks
+            // like, and an action that can be taken should not.
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-muted hover:bg-surface-3 hover:text-accent disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-muted"
+          >
+            <Bug className="size-2.5" />
+            File
+          </button>
+        )
+      )}
+    </div>
+  )
 
   return (
-    <li className={cn('rounded-md border bg-surface-1/40 px-2 py-1.5', border)}>
+    <li
+      className={cn(
+        nested ? 'py-1.5' : cn('rounded-md border bg-surface-1/40 px-2 py-1.5', border),
+      )}
+    >
       <div className="flex items-start gap-2">
-        <Icon className={cn('mt-px size-3 shrink-0', text)} />
-        <p className="min-w-0 flex-1 text-[11px] leading-snug text-ink-muted">
-          <Marked text={issue.summary} />
-        </p>
+        {!nested && <Icon className={cn('mt-0.5 size-3 shrink-0', text)} />}
+        <div className="min-w-0 flex-1">
+          {issue.path ? (
+            <PathLabel path={issue.path} leaf={nested} />
+          ) : (
+            <span className="text-[11px] text-ink">{KIND_LABELS[issue.kind]}</span>
+          )}
+          <p className="text-[11px] leading-snug text-ink-muted">
+            <Marked text={summary} />
+          </p>
+        </div>
       </div>
 
-      <div className="mt-1 flex flex-wrap items-center gap-1.5 pl-5">
-        <Badge tone={issue.severity === 'error' ? 'danger' : 'neutral'}>
-          {KIND_LABELS[issue.kind]}
-        </Badge>
-        {/* The distinction that decides urgency: drifted, or actively losing
-            events to validation. */}
-        {issue.rejects && <Badge tone="danger">rejected today</Badge>}
-        {issue.kind !== 'neverSeen' && (
-          <span
-            className="whitespace-nowrap text-[10px] text-ink-faint"
-            title={`${issue.affected} of ${issue.sampled} sampled events`}
-          >
-            {issue.affected}/{issue.sampled} · {percent}%
-          </span>
-        )}
-        {issue.example !== undefined && issue.example !== null && (
-          <span
-            className="min-w-0 max-w-full truncate font-mono text-[10px] text-ink-faint"
-            title={preview(issue.example)}
-          >
-            e.g. {preview(issue.example)}
-          </span>
-        )}
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          {/* The repair sits beside the reason for it, and says what it will
-              do rather than "Fix" — `Redeclare as string | null` is a claim
-              you can disagree with before clicking, which "Fix" is not. */}
-          {onFix && issue.fix && (
-            <button
-              type="button"
-              onClick={onFix}
-              disabled={fixing}
-              title={`${repairLabel(issue.fix)} in the draft — reviewed as a diff, nothing is saved to AWS`}
-              className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-accent hover:bg-surface-3 disabled:opacity-40"
+      {/* Everything below the header hangs under the icon. */}
+      <div className={cn(!nested && 'pl-5')}>
+        <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+          {/* The badge says what the severity rests on — rejected, read by
+              consumers, drifting unread — not a level. "Error" beside a
+              missing field claimed an impact nothing here had measured. */}
+          <Badge tone={SEVERITY_TONE[issue.severity]} title={severity.title}>
+            {severity.label}
+          </Badge>
+          {!nested && <Badge tone="neutral">{KIND_LABELS[issue.kind]}</Badge>}
+          {issue.kind !== 'neverSeen' && (
+            <span
+              className="whitespace-nowrap text-[10px] text-ink-faint"
+              title={`${issue.affected} of ${issue.sampled} sampled events`}
             >
-              <Wand2 className="size-2.5" />
-              {repairLabel(issue.fix)}
-            </button>
+              {issue.affected}/{issue.sampled} · {percent}%
+            </span>
           )}
-
-          {onSuggest && !suggestion && (
-            <button
-              type="button"
-              onClick={onSuggest}
-              disabled={suggesting}
-              title="Ask a model what to do about this, from the values real events carry"
-              className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-muted hover:bg-surface-3 hover:text-accent disabled:opacity-40"
+          {issue.observed && nested && (
+            <span className="font-mono text-[10px] text-ink-faint">{issue.observed}</span>
+          )}
+          {issue.example !== undefined && issue.example !== null && (
+            <span
+              className="min-w-0 max-w-full truncate font-mono text-[10px] text-ink-faint"
+              title={preview(issue.example)}
             >
-              <Sparkles className="size-2.5" />
-              {suggesting ? 'Asking…' : 'Suggest'}
-            </button>
+              e.g. {preview(issue.example)}
+            </span>
           )}
+        </div>
 
-          {filed ? (
-            <FiledChip ticket={filed} />
-          ) : (
-            onFile && (
+        {/* Who breaks. The files are the evidence for the badge above, and
+            the owners are who to talk to before changing the field. A file
+            that passes the parent along whole is shown as that. */}
+        {issue.impact && (issue.impact.readers.length > 0 || issue.impact.indirect.length > 0) && (
+          <ul className="mt-1 flex flex-col gap-0.5">
+            {issue.impact.readers.map((file) => (
+              <li key={`${file.repo}/${file.path}`}>
+                <RepoFileLink repo={file.repo} path={file.path} url={file.url}>
+                  {file.owners.join(' ')}
+                </RepoFileLink>
+              </li>
+            ))}
+            {issue.impact.indirect.map((file) => (
+              <li key={`${file.repo}/${file.path}`}>
+                <RepoFileLink repo={file.repo} path={file.path} url={file.url}>
+                  passes the parent along
+                </RepoFileLink>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {/* The validator's own words. For a rejection nothing else explains,
+            this is the only line that says what is actually wrong — and it was
+            being carried all the way from Rust and then dropped here. */}
+        {issue.message && (
+          <p className="mt-1 truncate font-mono text-[10px] text-ink-muted" title={issue.message}>
+            {issue.message}
+          </p>
+        )}
+
+        {/* What to do and the buttons that do it, on one line: the sentence
+            explains the button beside it. */}
+        <div className="mt-1 flex items-start gap-2">
+          <p className="min-w-0 flex-1 text-[10px] leading-snug text-ink-faint">
+            <Marked text={action} />
+          </p>
+          <div className="shrink-0">{actions}</div>
+        </div>
+
+        {/* A model's proposal, shown with its reasoning and not applied until
+            asked. The rationale is the part worth reading: it says what the edit
+            gives up, which is the half of the decision the row cannot show. */}
+        {suggestion && (
+          <div className="mt-1.5 rounded border border-edge bg-surface-2/50 px-2 py-1.5">
+            <p className="text-[10px] leading-snug text-ink-muted">
+              {suggestion.rationale}
+            </p>
+            {suggestion.repair ? (
               <button
                 type="button"
-                onClick={onFile}
-                disabled={!canFile}
-                title={
-                  canFile
-                    ? 'File this with the team that owns the producer'
-                    : 'Connect Jira in Settings → Jira to file this'
-                }
-                // Muted, not faint: faint is what a disabled control looks
-                // like, and an action that can be taken should not.
-                className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-muted hover:bg-surface-3 hover:text-accent disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-muted"
+                onClick={() => onApplySuggestion(suggestion.repair!)}
+                disabled={fixing}
+                className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-accent hover:bg-surface-3 disabled:opacity-40"
               >
-                <Bug className="size-2.5" />
-                File
+                <Wand2 className="size-2.5" />
+                {repairLabel(suggestion.repair)}
               </button>
-            )
-          )}
-        </div>
+            ) : (
+              <p className="mt-1 text-[10px] text-ink-faint">
+                No mechanical edit proposed — this one wants a decision.
+              </p>
+            )}
+          </div>
+        )}
       </div>
-
-      {/* The validator's own words. For a rejection nothing else explains,
-          this is the only line that says what is actually wrong — and it was
-          being carried all the way from Rust and then dropped here. */}
-      {issue.message && (
-        <p
-          className="mt-1 truncate pl-5 font-mono text-[10px] text-ink-muted"
-          title={issue.message}
-        >
-          {issue.message}
-        </p>
-      )}
-
-      <p className="mt-1 pl-5 text-[10px] leading-snug text-ink-faint">
-        <Marked text={issue.action} />
-      </p>
-
-      {/* A model's proposal, shown with its reasoning and not applied until
-          asked. The rationale is the part worth reading: it says what the edit
-          gives up, which is the half of the decision the row cannot show. */}
-      {suggestion && (
-        <div className="mt-1.5 ml-5 rounded border border-edge bg-surface-2/50 px-2 py-1.5">
-          <p className="text-[10px] leading-snug text-ink-muted">
-            {suggestion.rationale}
-          </p>
-          {suggestion.repair ? (
-            <button
-              type="button"
-              onClick={() => onApplySuggestion(suggestion.repair!)}
-              disabled={fixing}
-              className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-accent hover:bg-surface-3 disabled:opacity-40"
-            >
-              <Wand2 className="size-2.5" />
-              {repairLabel(suggestion.repair)}
-            </button>
-          ) : (
-            <p className="mt-1 text-[10px] text-ink-faint">
-              No mechanical edit proposed — this one wants a decision.
-            </p>
-          )}
-        </div>
-      )}
     </li>
   )
 }

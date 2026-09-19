@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ExternalLink, GitCommitHorizontal, RefreshCw, Users } from 'lucide-react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import * as ipc from '@/lib/ipc'
@@ -265,16 +265,7 @@ function SkippedList({ skipped, count }: { skipped: SkippedMatch[]; count: numbe
             key={`${s.repo}/${s.path}`}
             className="flex min-w-0 items-center gap-2 pl-3 text-[10px]"
           >
-            <button
-              type="button"
-              onClick={() => void openUrl(s.url)}
-              className="flex min-w-0 items-center gap-1 text-ink-muted hover:underline"
-              title={s.url}
-            >
-              <span className="shrink-0">{s.repo.split('/')[1] ?? s.repo}</span>
-              <span className="truncate font-mono">{s.path}</span>
-              <ExternalLink className="size-3 shrink-0 text-ink-faint" />
-            </button>
+            <RepoFileLink repo={s.repo} path={s.path} url={s.url} />
             <span className="ml-auto shrink-0 font-mono text-ink-faint" title="Matched by">
               {s.pattern}
             </span>
@@ -284,24 +275,59 @@ function SkippedList({ skipped, count }: { skipped: SkippedMatch[]; count: numbe
   )
 }
 
+/**
+ * A file in a repository, opened on GitHub. The repo name is shown only when
+ * asked for: inside a repo's own card it is already the heading.
+ */
+export function RepoFileLink({
+  repo,
+  path,
+  url,
+  children,
+}: {
+  repo?: string
+  path: string
+  url: string
+  /** Trailing note, dimmed. */
+  children?: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => void openUrl(url)}
+      className="flex min-w-0 max-w-full items-center gap-1 text-left text-[10px] text-ink-muted hover:underline"
+      title={url}
+    >
+      {repo && <span className="shrink-0">{repo.split('/')[1] ?? repo}</span>}
+      <span className="truncate font-mono">{path}</span>
+      <ExternalLink className="size-3 shrink-0 text-ink-faint" />
+      {children && <span className="shrink-0 text-ink-faint">{children}</span>}
+    </button>
+  )
+}
+
 /** One file that carries the type, as a link, with its own introduction when secondary. */
 function FileLink({ file, secondary = false }: { file: ProducerOrigin; secondary?: boolean }) {
+  const reads = file.reads.join(', ')
   return (
     <div className={cn('flex min-w-0 flex-col gap-0.5', secondary && 'pl-3')}>
-      <button
-        type="button"
-        onClick={() => void openUrl(file.url)}
-        className="flex min-w-0 items-center gap-1 text-left text-[10px] text-ink-muted hover:underline"
-        title={file.url}
-      >
-        <span className="truncate font-mono">{file.path}</span>
-        <ExternalLink className="size-3 shrink-0 text-ink-faint" />
-        {file.incidental && <span className="shrink-0 text-ink-faint">· incidental</span>}
-      </button>
+      <RepoFileLink path={file.path} url={file.url}>
+        {file.incidental && '· incidental'}
+      </RepoFileLink>
       {secondary && file.introduced && (
         <span className="text-[10px] text-ink-faint">
           added by {file.introduced.author}
           {file.introduced.pullNumber ? ` in PR #${file.introduced.pullNumber}` : ''}
+        </span>
+      )}
+      {/* The fields it reads are what the analysis grades severity by, so
+          they are shown where they can be checked against the code. */}
+      {reads && (
+        <span
+          className="truncate font-mono text-[10px] text-ink-faint"
+          title={`Reads off the event detail: ${reads}`}
+        >
+          reads {reads}
         </span>
       )}
     </div>

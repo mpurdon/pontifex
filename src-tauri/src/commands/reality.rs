@@ -2,6 +2,7 @@
 
 use crate::aws::clients::map_sdk_error;
 use crate::aws::log_scan;
+use crate::commands::origin;
 use crate::error::{Error, Result};
 use crate::events_cache::{cache_key, parse_event, CachedEvent};
 use crate::logging::cat;
@@ -49,7 +50,7 @@ pub struct RealityCheckRequest {
     pub persist: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RealityCheckResult {
     #[serde(flatten)]
@@ -192,10 +193,7 @@ pub async fn check_against_events(
     let result = run_check(&state, request, env_id.as_deref()).await?;
     if persist {
         let env = state.resolve_environment(env_id.as_deref()).await?;
-        state
-            .analyses
-            .put(&env.id, &name, serde_json::to_value(&result)?)
-            .await;
+        state.analyses.put(&env.id, &name, result.clone()).await;
     }
     Ok(result)
 }
@@ -209,7 +207,28 @@ pub async fn cached_analysis(
     env_id: Option<String>,
 ) -> Result<Option<crate::analysis_cache::CachedAnalysis>> {
     let env = state.resolve_environment(env_id.as_deref()).await?;
-    Ok(state.analyses.get(&env.id, &name).await)
+    let Some(mut cached) = state.analyses.get(&env.id, &name).await else {
+        return Ok(None);
+    };
+    // Graded against the lookup as it is now, not as it was when the
+    // analysis ran: the consumers may have been found since.
+    let identity = EventIdentity::from_schema_name(&name)?;
+    origin::grade_by_consumers(&state, &identity, &mut cached.result.report.issues).await;
+    Ok(Some(cached))
+}
+
+/// `check_events`, then the consumer grade. The one way a report is made,
+/// so no screen shows a validator-only grade beside a consumer-graded one.
+async fn graded_check(
+    state: &AppState,
+    identity: &EventIdentity,
+    document: &Value,
+    type_name: &str,
+    payloads: &[Value],
+) -> Result<EventCheckReport> {
+    let mut report = events::check_events(document, type_name, payloads)?;
+    origin::grade_by_consumers(state, identity, &mut report.issues).await;
+    Ok(report)
 }
 
 async fn run_check(
@@ -262,7 +281,8 @@ async fn run_check(
         .unwrap_or_default();
 
     if cached.age_ms.is_some() && (request.cached_only || (!request.refresh && cached.covered)) {
-        let report = events::check_events(&document, &type_name, &cached.payloads)?;
+        let report =
+            graded_check(state, &identity, &document, &type_name, &cached.payloads).await?;
         let note = if cached.payloads.is_empty() {
             Some(format!(
                 "Nothing cached for {} in this window. Run a fresh check to fetch it.",
@@ -286,7 +306,7 @@ async fn run_check(
     if request.cached_only {
         // Asked not to hit AWS and there is nothing cached: say so rather than
         // reporting a clean bill of health from zero events.
-        let report = events::check_events(&document, &type_name, &[])?;
+        let report = graded_check(state, &identity, &document, &type_name, &[]).await?;
         return Ok(RealityCheckResult {
             report,
             log_group,
@@ -383,7 +403,7 @@ async fn run_check(
             payloads.len()
         ),
     );
-    let report = events::check_events(&document, &type_name, &payloads)?;
+    let report = graded_check(state, &identity, &document, &type_name, &payloads).await?;
     checking.done(format!(
         "{} passed, {} failed, {} undeclared",
         report.passed,
@@ -750,6 +770,7 @@ pub async fn registry_report(
             let buckets = &buckets;
             let observed = &observed;
             let graded_count = &graded_count;
+            let state = &state;
             async move {
                 let key_for_row = key.clone();
                 let payloads: &[Value] = buckets.get(&key).map(Vec::as_slice).unwrap_or(&[]);
@@ -757,7 +778,7 @@ pub async fn registry_report(
 
                 let graded = async {
                     let (content, type_name) = fetch_schema(&schemas, &registry, &name).await?;
-                    events::check_events(&content, &type_name, payloads)
+                    graded_check(state, &identity, &content, &type_name, payloads).await
                 }
                 .await;
 
@@ -1356,8 +1377,14 @@ pub async fn issues_for_schemas(
                     let (type_name, issues) =
                         match fetch_schema(&schemas, &registry, &name).await {
                             Ok((content, type_name)) => {
-                                let report =
-                                    events::check_events(&content, &type_name, &cached.payloads)?;
+                                let report = graded_check(
+                                    state,
+                                    &identity,
+                                    &content,
+                                    &type_name,
+                                    &cached.payloads,
+                                )
+                                .await?;
                                 (Some(type_name), report.issues)
                             }
                             Err(Error::NotFound(_)) => {
@@ -1492,6 +1519,6 @@ pub async fn validate_event(
     };
     let detail =
         detail.ok_or_else(|| Error::Invalid("The event has no `detail` to check".into()))?;
-    let report = events::check_events(&content, &type_name, &[detail])?;
+    let report = graded_check(&state, &identity, &content, &type_name, &[detail]).await?;
     Ok(report.issues)
 }

@@ -35,12 +35,13 @@ fn finds_who_first_published_an_event_type() {
     eprintln!("outcome {outcome:?} in {:?}", started.elapsed());
     for p in &producers {
         eprintln!(
-            "{} {} role={:?} incidental={} owners={:?}\n    {}",
+            "{} {} role={:?} incidental={} owners={:?} reads={:?}\n    {}",
             p.repo,
             p.path,
             p.role,
             p.incidental,
             p.owners,
+            p.reads,
             p.introduced
                 .as_ref()
                 .map(|i| format!(

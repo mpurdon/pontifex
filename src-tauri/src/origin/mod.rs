@@ -17,6 +17,8 @@
 //! a month; a lookup can be forced fresh.
 
 pub mod github;
+pub mod impact;
+pub mod reads;
 pub mod wiring;
 
 use crate::ttl_cache::{TtlCache, THIRTY_DAYS_MS};
@@ -62,6 +64,11 @@ pub struct ProducerOrigin {
     /// What the file does with the event type.
     #[serde(default)]
     pub role: Role,
+    /// Fields it reads off the event detail, as dotted paths — the evidence
+    /// for grading an issue by who it would break. Empty for a file that
+    /// only names the type, and for lookups cached before this was read.
+    #[serde(default)]
+    pub reads: Vec<String>,
 }
 
 /// What a file that carries the event type is doing with it.
@@ -134,7 +141,15 @@ pub struct EventOrigin {
     pub github: GithubOutcome,
     /// When this answer was computed, epoch ms.
     pub cached_at: i64,
+    /// What was collected: see [`ORIGIN_VERSION`].
+    #[serde(default)]
+    pub version: u8,
 }
+
+/// Bumped when a lookup starts collecting something it did not before, so
+/// entries cached without it are looked up again rather than served for a
+/// month. 2: field reads, for grading severity by consumer.
+pub const ORIGIN_VERSION: u8 = 2;
 
 /// Cached answers, keyed by organisation and event type.
 pub struct OriginCache(TtlCache<EventOrigin>);
@@ -144,7 +159,14 @@ impl OriginCache {
         OriginCache(TtlCache::load(
             cache_dir.join("origins.json"),
             THIRTY_DAYS_MS,
-            |o| o.cached_at,
+            // An entry from an older lookup is stamped as already expired.
+            |o| {
+                if o.version < ORIGIN_VERSION {
+                    0
+                } else {
+                    o.cached_at
+                }
+            },
             "origins",
         ))
     }

@@ -6,7 +6,7 @@ use crate::schema::model::EventIdentity;
 use crate::state::AppState;
 use serde::Serialize;
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{Emitter, State};
 
 /// The bus checkout's `owner/repo`, when a checkout is configured.
 async fn bus_slug(settings: &crate::settings::Settings) -> Option<String> {
@@ -41,9 +41,36 @@ pub async fn cached_origin(
     state.origins.get(org, source, detail_type).await
 }
 
+/// Grade issues by who reads the fields they are about, from the cached
+/// origin of the event type. Without a lookup the validator's grade stands.
+/// Every place issues are produced calls this, so one schema reads the same
+/// way on every screen.
+pub async fn grade_by_consumers(
+    state: &AppState,
+    identity: &EventIdentity,
+    issues: &mut [crate::schema::events::Issue],
+) {
+    let org = resolve_org(&state.settings_snapshot().await).await;
+    if let Some(origin) = cached_origin(
+        state,
+        org.as_deref(),
+        &identity.source,
+        &identity.detail_type,
+    )
+    .await
+    {
+        crate::origin::impact::grade(issues, &origin);
+    }
+}
+
+/// Emitted when a lookup lands, naming the type, so any screen showing its
+/// issues can grade them again.
+pub const ORIGIN_UPDATED: &str = "origin://updated";
+
 /// Where an event type came from. Cached for a week unless `refresh`.
 #[tauri::command]
 pub async fn event_origin(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     name: String,
     refresh: Option<bool>,
@@ -109,8 +136,10 @@ pub async fn event_origin(
         producers,
         github,
         cached_at: crate::events_cache::now_ms(),
+        version: crate::origin::ORIGIN_VERSION,
     };
     state.origins.put(org.as_deref(), result.clone()).await;
+    let _ = app.emit(ORIGIN_UPDATED, &identity);
     Ok(result)
 }
 

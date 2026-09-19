@@ -26,7 +26,7 @@ import {
 } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type { CompiledWatch, Environment, FiledTicket, IpcError, Issue, NotifierOutcome, Watch, WatchCondition, WatchHit, WatchMark, WatchProbe, WatchStatus } from '@/lib/types'
-import { KIND_LABELS, SEVERITY_TONE } from '@/lib/issues'
+import { KIND_LABELS, SEVERITY_TONE, describeSeverity } from '@/lib/issues'
 import { FileTicketDialog, FiledChip } from '@/features/jira/file-ticket-dialog'
 import { formatAge, formatTime, stringify } from '@/lib/format'
 import {
@@ -1713,7 +1713,10 @@ function HitCheck({
               key={issue.key}
               className="flex items-start gap-2 rounded border border-edge/60 px-2 py-1"
             >
-              <Badge tone={SEVERITY_TONE[issue.severity]}>{KIND_LABELS[issue.kind]}</Badge>
+              <Badge tone={SEVERITY_TONE[issue.severity]} title={describeSeverity(issue).title}>
+                {describeSeverity(issue).label}
+              </Badge>
+              <Badge tone="neutral">{KIND_LABELS[issue.kind]}</Badge>
               <span className="min-w-0 flex-1 text-ink-muted">
                 {issue.path && <span className="mr-1 font-mono text-ink">{issue.path}</span>}
                 <Marked text={issue.summary} />

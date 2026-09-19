@@ -117,6 +117,13 @@ the registry, not only from a graded schema:
   lists what disagrees, or says there is no schema. Each problem files with
   the hit's environment and log group as context.
 
+Every ticket carries the two lines that decide its urgency: whether the bus
+is rejecting the events today, and — once the origin lookup has found
+consumers — how many of the consumer files found read the field, with those
+files and their CODEOWNERS listed under *Consumers that read this field*.
+An issue about a field nobody reads says so, which is the case for closing
+the ticket rather than fixing the producer.
+
 ## Routing by owner
 
 A source rule needs someone to have written it. The origin lookup already

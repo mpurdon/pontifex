@@ -19,6 +19,57 @@ export const SEVERITY_TONE: Record<IssueSeverity, 'danger' | 'warn' | 'neutral'>
   info: 'neutral',
 }
 
+const SEVERITY_WORD: Record<IssueSeverity, string> = {
+  error: 'error',
+  warning: 'drifting',
+  info: 'note',
+}
+
+/**
+ * What the severity is grounded in: a word or two for the badge, and the
+ * sentence behind it for the tooltip.
+ *
+ * "Error" and "warning" read as impact levels, and until the origin lookup
+ * has found who reads a field they are not: the validator only knows whether
+ * the bus rejects the events. So the badge says the thing that is actually
+ * known — rejected, read by consumers, drifting unread — rather than a level
+ * the reader would have to guess the meaning of.
+ */
+export function describeSeverity(issue: Issue): { label: string; title: string } {
+  if (issue.rejects) {
+    return {
+      label: 'rejected',
+      title: 'Schema validation throws these events away today, so no consumer sees them at all',
+    }
+  }
+  const impact = issue.impact
+  if (impact) {
+    const readers = impact.readers.length
+    const indirect = impact.indirect.length
+    const found = `the ${impact.handlers} consumer file${impact.handlers === 1 ? '' : 's'} the origin lookup found`
+    if (readers > 0) {
+      return {
+        label: `read by ${readers} consumer${readers === 1 ? '' : 's'}`,
+        title: `${readers} of ${found} read this field`,
+      }
+    }
+    if (indirect > 0) {
+      return {
+        label: SEVERITY_WORD[issue.severity],
+        title: `${indirect} of ${found} pass this field's parent along whole, so whether they read it is not visible`,
+      }
+    }
+    return { label: 'no consumer reads it', title: `None of ${found} reads this field` }
+  }
+  return {
+    label: SEVERITY_WORD[issue.severity],
+    title:
+      issue.severity === 'info'
+        ? 'Worth knowing; nothing to do on its own'
+        : 'The schema and the traffic disagree, but nothing is rejected. Who reads the field is unknown until the origin lookup has run.',
+  }
+}
+
 /**
  * An issue a person raised rather than one the validator found — about the
  * event type as a whole (`path` empty) or one field of it. Same shape as a

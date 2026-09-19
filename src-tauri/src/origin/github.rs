@@ -738,14 +738,25 @@ async fn examine(
         }
     };
     let owners = codeowners.map(|c| owners_for(c, &path)).unwrap_or_default();
+    let incidental = is_incidental(&path);
+    // What a consumer does with the event, from the same text its role was
+    // read from. A publisher's accesses are of the payload it is building,
+    // and a test's are of a fixture; neither says what breaks downstream,
+    // so neither gets reads — which is how the grader knows who counts.
+    let reads = if role == Role::Publisher || incidental {
+        Vec::new()
+    } else {
+        super::reads::field_reads(&head)
+    };
     ProducerOrigin {
-        incidental: is_incidental(&path),
+        incidental,
         role,
         repo,
         path,
         url,
         introduced,
         owners,
+        reads,
     }
 }
 

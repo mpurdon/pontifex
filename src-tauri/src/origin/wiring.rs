@@ -7,7 +7,7 @@
 
 use super::{pull_number_from_subject, Authorship};
 use crate::error::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The oldest commit in the checkout that mentions `literal`, outside the
 /// schema exports. `None` when the checkout is missing or has no mention.
@@ -64,7 +64,30 @@ pub async fn first_mention(repo: &Path, literal: &str) -> Result<Option<Authorsh
 }
 
 /// `owner/repo` from the checkout's `origin` remote, for building links.
+///
+/// Remembered per checkout: the remote of a clone does not change under a
+/// running app, and this is asked on every graded check, so the `git`
+/// spawn is paid once rather than on every keystroke of a live re-check.
 pub async fn github_slug(repo: &Path) -> Option<String> {
+    static SLUGS: std::sync::Mutex<Option<std::collections::HashMap<PathBuf, Option<String>>>> =
+        std::sync::Mutex::new(None);
+    if let Some(known) = SLUGS
+        .lock()
+        .ok()
+        .and_then(|s| s.as_ref()?.get(repo).cloned())
+    {
+        return known;
+    }
+    let slug = read_github_slug(repo).await;
+    if let Ok(mut slugs) = SLUGS.lock() {
+        slugs
+            .get_or_insert_with(Default::default)
+            .insert(repo.to_path_buf(), slug.clone());
+    }
+    slug
+}
+
+async fn read_github_slug(repo: &Path) -> Option<String> {
     let output = tokio::process::Command::new("git")
         .arg("-C")
         .arg(repo)

@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Why one sampled event failed validation.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FailureGroup {
     /// JSON Pointer into the event payload.
@@ -39,7 +39,7 @@ pub struct FieldObservation {
 }
 
 /// A field the schema declares but the sample never contained.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnusedField {
     pub path: String,
@@ -47,7 +47,7 @@ pub struct UnusedField {
 }
 
 /// A declared field whose observed type contradicts the schema.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TypeMismatch {
     pub path: String,
@@ -77,7 +77,7 @@ pub struct TypeMismatch {
 }
 
 /// A declared enum that real traffic exceeded.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnumDrift {
     pub path: String,
@@ -89,7 +89,7 @@ pub struct EnumDrift {
     pub unexpected_in: usize,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DriftReport {
     /// Present in events, absent from the schema.
@@ -144,7 +144,7 @@ pub fn unregistered_issue(
     Issue {
         key: "unregistered".into(),
         kind: IssueKind::Unregistered,
-        severity: IssueSeverity::Warning,
+        severity: severity_for(IssueKind::Unregistered, false, None),
         path: String::new(),
         summary: format!(
             "`{source}` publishes `{detail_type}` and the registry has no schema for it"
@@ -164,6 +164,7 @@ pub fn unregistered_issue(
         example,
         message: None,
         fix: None,
+        impact: None,
     }
 }
 
@@ -220,9 +221,14 @@ pub struct Issue {
     /// on the way one driven by matching the summary text would.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix: Option<Repair>,
+    /// Who reads this field, when the origin lookup has found consumers —
+    /// and what `severity` was graded by, above the validator's floor. See
+    /// `origin::impact`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impact: Option<crate::origin::impact::Impact>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventCheckReport {
     pub sampled: usize,
@@ -799,11 +805,12 @@ fn pointer_to_path(pointer: &str) -> String {
     path
 }
 
-fn join_path(prefix: &str, name: &str) -> String {
-    if prefix.is_empty() {
-        name.to_string()
-    } else {
-        format!("{prefix}.{name}")
+/// `prefix.name`, with either side allowed to be empty.
+pub(crate) fn join_path(prefix: &str, name: &str) -> String {
+    match (prefix.is_empty(), name.is_empty()) {
+        (true, _) => name.to_string(),
+        (_, true) => prefix.to_string(),
+        _ => format!("{prefix}.{name}"),
     }
 }
 
@@ -860,18 +867,53 @@ fn field_label(path: &str) -> String {
 /// twice with two different denominators. Here the rejection is a *property* of
 /// the problem rather than a second entry: `rejects` says whether events are
 /// being thrown away over it.
-/// What a matched validation failure says about an issue.
+/// What a matched validation failure says about an issue: how many events,
+/// whether they are rejected, and the validator's words.
 ///
-/// The same four conclusions were drawn in each of the blocks below, which
-/// left the parts that genuinely differ — the wording — buried among the parts
+/// The same conclusions were drawn in each of the blocks below, which left
+/// the parts that genuinely differ — the wording — buried among the parts
 /// that do not.
 fn from_failure(
     matched: Option<(usize, String)>,
     fallback: usize,
-) -> (IssueSeverity, usize, bool, Option<String>) {
+) -> (usize, bool, Option<String>) {
     match matched {
-        Some((count, message)) => (IssueSeverity::Error, count, true, Some(message)),
-        None => (IssueSeverity::Warning, fallback, false, None),
+        Some((count, message)) => (count, true, Some(message)),
+        None => (fallback, false, None),
+    }
+}
+
+/// The one severity rule, for the validator's grade and the consumer
+/// grade alike.
+///
+/// The validator's floor: events being rejected is an error, a field the
+/// sample never carried is a note, and any other disagreement a warning.
+/// Consumers, when the origin lookup has found some, move it: a field
+/// somebody reads is an error whatever the validator said (a never-sent
+/// field that is read is a handler waiting on a value that never comes,
+/// so a warning); a field nobody reads or passes along is a note; and one
+/// passed along whole to code the scan cannot see keeps the floor.
+/// Rejection stays an error regardless: the whole event is lost, and every
+/// reader of every field with it.
+pub fn severity_for(
+    kind: IssueKind,
+    rejects: bool,
+    impact: Option<&crate::origin::impact::Impact>,
+) -> IssueSeverity {
+    let floor = if rejects {
+        IssueSeverity::Error
+    } else if kind == IssueKind::NeverSeen {
+        IssueSeverity::Info
+    } else {
+        IssueSeverity::Warning
+    };
+    match impact {
+        Some(i) if !i.readers.is_empty() => match floor {
+            IssueSeverity::Info => IssueSeverity::Warning,
+            _ => IssueSeverity::Error,
+        },
+        Some(i) if i.indirect.is_empty() && floor == IssueSeverity::Warning => IssueSeverity::Info,
+        _ => floor,
     }
 }
 
@@ -911,7 +953,7 @@ fn build_issues(
     };
 
     for mismatch in &drift.type_mismatches {
-        let (severity, affected, rejects, message) = from_failure(
+        let (affected, rejects, message) = from_failure(
             take("wrongType", &mismatch.path, &mut used),
             mismatch.mismatched_in,
         );
@@ -919,7 +961,7 @@ fn build_issues(
         issues.push(Issue {
             key: format!("wrongType:{}", mismatch.path),
             kind: IssueKind::WrongType,
-            severity,
+            severity: severity_for(IssueKind::WrongType, rejects, None),
             path: mismatch.path.clone(),
             summary: format!(
                 "{} is declared {} but {} of events send {}",
@@ -945,11 +987,12 @@ fn build_issues(
                     types: mismatch.suggested.clone(),
                 }
             }),
+            impact: None,
         });
     }
 
     for entry in &drift.enum_drift {
-        let (severity, affected, rejects, message) = from_failure(
+        let (affected, rejects, message) = from_failure(
             take("outsideEnum", &entry.path, &mut used),
             entry.unexpected_in,
         );
@@ -962,7 +1005,7 @@ fn build_issues(
         issues.push(Issue {
             key: format!("outsideEnum:{}", entry.path),
             kind: IssueKind::OutsideEnum,
-            severity,
+            severity: severity_for(IssueKind::OutsideEnum, rejects, None),
             path: entry.path.clone(),
             summary: format!(
                 "{} carries {} the declared values do not allow",
@@ -992,17 +1035,18 @@ fn build_issues(
                     values: entry.unexpected.clone(),
                 }
             }),
+            impact: None,
         });
     }
 
     for field in &drift.missing_required {
         let absent = sampled.saturating_sub(field.seen_in);
-        let (severity, affected, rejects, message) =
+        let (affected, rejects, message) =
             from_failure(take("missingRequired", &field.path, &mut used), absent);
         issues.push(Issue {
             key: format!("missingRequired:{}", field.path),
             kind: IssueKind::MissingRequired,
-            severity,
+            severity: severity_for(IssueKind::MissingRequired, rejects, None),
             path: field.path.clone(),
             summary: format!(
                 "{} is required but absent from {} of events",
@@ -1021,19 +1065,20 @@ fn build_issues(
             example: field.example.clone(),
             message,
             fix: repairable(&field.path).then_some(Repair::DropRequired),
+            impact: None,
         });
     }
 
     for field in &drift.undeclared {
         // Affected is always the number of events carrying the field, whether
         // or not the schema rejects it, so the fallback count is unused here.
-        let (severity, _, rejects, message) =
+        let (_, rejects, message) =
             from_failure(take("undeclared", &field.path, &mut used), field.seen_in);
         let types = field.types.join(" | ");
         issues.push(Issue {
             key: format!("undeclared:{}", field.path),
             kind: IssueKind::Undeclared,
-            severity,
+            severity: severity_for(IssueKind::Undeclared, rejects, None),
             path: field.path.clone(),
             summary: format!(
                 "{} of events send {}, which the schema does not describe",
@@ -1065,6 +1110,7 @@ fn build_issues(
                     example: field.example.clone(),
                 }
             }),
+            impact: None,
         });
     }
 
@@ -1072,7 +1118,7 @@ fn build_issues(
         issues.push(Issue {
             key: format!("neverSeen:{}", field.path),
             kind: IssueKind::NeverSeen,
-            severity: IssueSeverity::Info,
+            severity: severity_for(IssueKind::NeverSeen, false, None),
             path: field.path.clone(),
             summary: format!("{} never appeared in this sample", field_label(&field.path)),
             action: if field.required {
@@ -1099,6 +1145,7 @@ fn build_issues(
             // Nothing mechanical to do: whether a field that went quiet is dead
             // or merely rare is a question about the producer, not the document.
             fix: None,
+            impact: None,
         });
     }
 
@@ -1112,7 +1159,7 @@ fn build_issues(
         issues.push(Issue {
             key: format!("rejected:{}:{}", path, failure.message),
             kind: IssueKind::Rejected,
-            severity: IssueSeverity::Error,
+            severity: severity_for(IssueKind::Rejected, true, None),
             path: path.clone(),
             // The validator's message carries the whole finding for this kind
             // — which constraint, and the value that broke it. A summary of
@@ -1135,18 +1182,25 @@ fn build_issues(
             // A pattern, a format, a bound. Which constraint to relax, and to
             // what, is a judgement the sample does not contain.
             fix: None,
+            impact: None,
         });
     }
 
-    // Rejections first, then by how much traffic each affects: the ranking is
-    // the recommendation about what to look at.
+    rank(&mut issues);
+    issues
+}
+
+/// Worst first, then by how much traffic each affects: the ranking is the
+/// recommendation about what to look at. Shared with the consumer grading,
+/// which changes severities after the fact and has to leave the list in the
+/// same order it would have been built in.
+pub fn rank(issues: &mut [Issue]) {
     issues.sort_by(|a, b| {
         a.severity
             .cmp(&b.severity)
             .then(b.affected.cmp(&a.affected))
             .then(a.path.cmp(&b.path))
     });
-    issues
 }
 
 /// Shorten a message to fit a title, on a word boundary where possible.
