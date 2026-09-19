@@ -1,6 +1,8 @@
+use crate::analysis_cache::AnalysisCache;
 use crate::aws::clients::ClientCache;
-use crate::events_cache::EventCache;
 use crate::error::{Error, Result};
+use crate::events_cache::EventCache;
+use crate::origin::OriginCache;
 use crate::settings::{Environment, Settings};
 use crate::watch::{WatchStore, Watcher};
 use aws_config::SdkConfig;
@@ -20,6 +22,10 @@ pub struct AppState {
     pub watch: WatchStore,
     /// The pollers themselves, one per armed environment.
     pub watcher: Watcher,
+    /// Answers to "where did this event type come from", a month at a time.
+    pub origins: OriginCache,
+    /// The last reality check per schema, a month at a time.
+    pub analyses: AnalysisCache,
 }
 
 impl AppState {
@@ -27,6 +33,8 @@ impl AppState {
         let events = EventCache::load(&cache_dir);
         events.set_budget_bytes(settings.scan.cache_bytes());
         let watch = WatchStore::load(&config_dir);
+        let origins = OriginCache::load(&cache_dir);
+        let analyses = AnalysisCache::load(&cache_dir);
         AppState {
             settings: RwLock::new(settings),
             config_dir,
@@ -34,6 +42,8 @@ impl AppState {
             events,
             watch,
             watcher: Watcher::new(),
+            origins,
+            analyses,
         }
     }
 

@@ -206,6 +206,26 @@ fn open_url(app: &AppHandle, url: &str) {
 /// Drop every cached SDK config. Useful after editing ~/.aws/config by hand.
 #[tauri::command]
 pub async fn refresh_credentials(state: State<'_, AppState>) -> Result<()> {
+    // Renew every SSO session an environment points at, so "refresh" means
+    // a fresh token and not only a dropped cache. A session that cannot be
+    // renewed silently is left for the sign-in flow, not treated as an error
+    // here — the badge will say so.
+    let sessions: std::collections::BTreeSet<String> = state
+        .settings_snapshot()
+        .await
+        .environments
+        .iter()
+        .filter_map(|e| e.sso.as_ref().map(|t| t.session.clone()))
+        .collect();
+    for session in sessions {
+        match sso::refresh_now(&session).await {
+            Ok(until) => linfo!(
+                cat::SSO,
+                "refreshed '{session}' on request; valid until {until}"
+            ),
+            Err(e) => lwarn!(cat::SSO, "'{session}' not renewed on request: {e}"),
+        }
+    }
     state.clients.invalidate_all().await;
     Ok(())
 }

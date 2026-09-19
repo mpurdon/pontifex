@@ -89,6 +89,12 @@ Pontifex then redeems the session token for that role's credentials on demand.
 Nothing is written to `~/.aws/config`, and no profile has to exist for an
 account to be reachable — one sign-in covers every account and role.
 
+The access token IAM Identity Center issues lives an hour, but the sign-in
+also stores a refresh token, and Pontifex renews the access token with it
+silently — ten minutes before expiry, whenever a token is needed, and on the
+header's refresh action. You sign in again only when the SSO session itself
+ends, the same as the AWS CLI.
+
 Only an `[sso-session]` block is required:
 
 ```ini
@@ -355,6 +361,11 @@ recursively.
 The draft is unsaved. Review it in the structure editor and register it like
 any other new schema — including the production diff confirmation.
 
+Those rows can also be **filed as tickets**, selected alongside the failing and
+drifting ones: the ticket says the source publishes the type and the registry
+has nothing for it, with an example payload, so the team that owns the
+producer gets asked for the contract. See `docs/jira-integration.md`.
+
 ### Renaming a type
 
 Hover a type in the left rail and click the pencil. The dialog shows how many
@@ -387,6 +398,49 @@ view.
 Panels are resizable, and the sizes are saved per layout in settings. In the
 schema list, hovering a source reveals a **pin** — pinned sources sort to the
 top so whatever you are working on stays reachable in a list of hundreds.
+
+## Where an event came from
+
+The registry says what an event looks like and nothing about who sends it, so
+when a payload is wrong the schema is silent on whom to ask. **Origin** — a
+view on every schema, and on every watch hit — answers that from two places:
+
+- **The bus repo.** `git log -S` over the local `global-event-bus` checkout
+  finds the commit that first mentioned the detail type outside the schema
+  exports: who wired it into the bus, when, and in which pull request.
+- **The producers.** A GitHub code search across the organisation for the
+  detail-type literal finds the code that publishes it. For each file, the
+  commit that first introduced the literal is found by binary search over the
+  file's history (GitHub has no pickaxe), along with the pull request it
+  landed in and the CODEOWNERS entry for the path — the person, the moment,
+  and the team that owns it now. Each file is read for what it does with the
+  type — a `PutEvents` call makes a publisher, a rule or event pattern a
+  consumer, anything else a mention — and the source's own name marks its
+  service as the publisher. The panel shows publishers first, then consumers,
+  then mere mentions, one card per repository with the rest of its files
+  folded away. Tests, fixtures and documents never count as either.
+- **An ignore list** in Settings → Repo names path globs the lookup never
+  examines — `*.test.*`, `*.spec.*`, `openapi-spec.*`, test and fixture
+  directories by default — so the budget goes on files that matter, and
+  everything the list lets through is read in the first pass. The panel lists
+  what was skipped and which pattern caught it, so an over-broad pattern shows
+  itself.
+
+The organisation is read from the bus checkout's `origin` remote unless set in
+Settings → Repo. The token is the GitHub CLI's own sign-in when `gh` is logged
+in, or a personal access token stored in the keychain. Answers are cached for a
+month; Refresh looks again. A lookup costs one code search and a few dozen
+ordinary API calls, well inside GitHub's limits, and takes about ten seconds
+the first time.
+
+The origin also feeds ticket routing: Settings → Jira can map an owning team
+or repository to a project, used when no source rule matches, and a ticket for
+a type whose origin has been looked up names the publisher, the owners, and
+the pull request that first published it.
+
+A schema's reality check is kept the same way: opening the schema again shows
+what the last Run found and how long ago, and Run re-scans when a fresher
+answer matters. Both caches drop entries older than thirty days.
 
 ## Watch mode
 
@@ -478,6 +532,10 @@ The hit list is built for scanning rather than reading:
   offers to draft one. The draft samples the two minutes around the hit in
   the hit's own log group, so it comes back in a second or two rather than
   scanning a day; the Health report is where the wide analysis lives.
+- **Each hit can be checked and filed.** *Check against schema* on an expanded
+  hit validates that one payload against its registered schema and lists what
+  disagrees — or says there is no schema — and every problem has a File button
+  that opens the same Jira preview the Analysis panel uses.
 - **Signing in clears everything at once.** A paused poller retries the
   moment credentials arrive, so the "sign in to resume" state does not linger
   for a minute after you have.

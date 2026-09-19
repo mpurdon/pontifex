@@ -54,9 +54,8 @@ fn parse_expiry(s: &str) -> Option<OffsetDateTime> {
         .ok()
         .or_else(|| {
             let normalized = s.trim_end_matches("UTC");
-            let fmt = time::macros::format_description!(
-                "[year]-[month]-[day]T[hour]:[minute]:[second]"
-            );
+            let fmt =
+                time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
             time::PrimitiveDateTime::parse(normalized, fmt)
                 .ok()
                 .map(|dt| dt.assume_utc())
@@ -70,9 +69,16 @@ pub struct SsoStatus {
     /// False for non-SSO profiles — nothing to log into.
     pub applicable: bool,
     pub has_token: bool,
+    /// True only when the token is past use *and* cannot be renewed
+    /// silently; a lapsed access token with a live refresh token is not
+    /// expired from the user's point of view.
     pub expired: bool,
-    /// RFC 3339 expiry of the cached token, when there is one.
+    /// RFC 3339 expiry of the cached access token, when there is one.
     pub expires_at: Option<String>,
+    /// The cache holds a refresh token and a live client registration, so
+    /// the access token renews on its own until the SSO session itself ends.
+    #[serde(default)]
+    pub refreshable: bool,
 }
 
 /// Read the cached token for a cache key (an SSO session name, or a legacy
@@ -91,15 +97,149 @@ pub fn read_token_by_key(key: &str) -> Result<Option<CachedToken>> {
     }
 }
 
+/// An SSO OIDC client for a region. The endpoints are unauthenticated, so no
+/// credentials are needed.
+async fn oidc_client(region: &str) -> aws_sdk_ssooidc::Client {
+    let cfg = aws_config::defaults(BehaviorVersion::latest())
+        .region(aws_config::Region::new(region.to_string()))
+        .no_credentials()
+        .load()
+        .await;
+    aws_sdk_ssooidc::Client::new(&cfg)
+}
+
+/// `expires_in` seconds from now, as the RFC 3339 stamp the CLI cache holds.
+fn expiry_from_now(expires_in: i32) -> Result<String> {
+    (OffsetDateTime::now_utc() + time::Duration::seconds(expires_in as i64))
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(Error::internal)
+}
+
+/// True when the access token ends within `margin` of now, or is unparseable.
+fn expires_within(token: &CachedToken, margin: time::Duration) -> bool {
+    parse_expiry(&token.expires_at)
+        .map(|exp| exp <= OffsetDateTime::now_utc() + margin)
+        .unwrap_or(true)
+}
 
 /// True when a token is absent, unparseable, or about to expire.
 ///
 /// A token expiring within a minute counts as expired so we do not start a long
 /// operation on credentials that die mid-flight.
 fn is_expired(token: &CachedToken) -> bool {
-    parse_expiry(&token.expires_at)
-        .map(|exp| exp <= OffsetDateTime::now_utc() + time::Duration::minutes(1))
-        .unwrap_or(true)
+    expires_within(token, time::Duration::minutes(1))
+}
+
+/// Renew this far ahead of expiry, so a long operation started now does not
+/// run into the boundary, and so the poller never sees a lapse at all.
+const REFRESH_MARGIN: time::Duration = time::Duration::minutes(10);
+
+/// Whether the cache holds what `CreateToken` needs for a refresh grant: the
+/// refresh token, and the client registration it was issued to, unexpired.
+/// The CLI writes all of these for an `sso-session` with registration
+/// scopes, and so does our own sign-in.
+fn can_refresh(token: &CachedToken) -> bool {
+    let registered = token.client_id.is_some() && token.client_secret.is_some();
+    let registration_live = token
+        .registration_expires_at
+        .as_deref()
+        .and_then(parse_expiry)
+        .map(|exp| exp > OffsetDateTime::now_utc())
+        .unwrap_or(true);
+    token.refresh_token.is_some() && registered && registration_live
+}
+
+/// Refreshes take turns: two environments on one session renewing at once
+/// would each spend the same refresh token, and the second would fail.
+static REFRESH_TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// A usable access token for a session, renewed silently when it is near
+/// its end and the cache allows. The browser is only needed once the SSO
+/// session itself — the refresh token — has run out.
+pub async fn fresh_token(session: &str) -> Result<String> {
+    let token = read_token_by_key(session)?
+        .ok_or_else(|| Error::Auth(format!("Not signed in to the '{session}' SSO session")))?;
+    if !expires_within(&token, REFRESH_MARGIN) {
+        return Ok(token.access_token);
+    }
+    if can_refresh(&token) {
+        let _turn = REFRESH_TURN.lock().await;
+        // Someone else may have renewed while we waited for the turn.
+        let token = read_token_by_key(session)?.unwrap_or_else(|| token.clone());
+        if !expires_within(&token, REFRESH_MARGIN) {
+            return Ok(token.access_token);
+        }
+        match refresh(session, &token).await {
+            Ok(renewed) => return Ok(renewed.access_token),
+            Err(e) => lwarn!(
+                crate::logging::cat::SSO,
+                "could not refresh the '{session}' SSO token: {e}"
+            ),
+        }
+    }
+    if is_expired(&token) {
+        return Err(Error::Auth(format!(
+            "The '{session}' SSO session has expired — sign in again"
+        )));
+    }
+    Ok(token.access_token)
+}
+
+/// Renew now regardless of how much life the token has left, for the
+/// explicit "refresh" action. Returns the new expiry.
+pub async fn refresh_now(session: &str) -> Result<String> {
+    let token = read_token_by_key(session)?
+        .ok_or_else(|| Error::Auth(format!("Not signed in to the '{session}' SSO session")))?;
+    if !can_refresh(&token) {
+        return Err(Error::Auth(format!(
+            "The '{session}' SSO session cannot be renewed silently — sign in again"
+        )));
+    }
+    let _turn = REFRESH_TURN.lock().await;
+    Ok(refresh(session, &token).await?.expires_at)
+}
+
+/// The refresh grant, and the cache file rewritten the way the CLI would.
+async fn refresh(session: &str, token: &CachedToken) -> Result<CachedToken> {
+    let (Some(client_id), Some(client_secret), Some(refresh_token)) = (
+        token.client_id.as_deref(),
+        token.client_secret.as_deref(),
+        token.refresh_token.as_deref(),
+    ) else {
+        return Err(Error::Auth("no refresh token in the SSO cache".into()));
+    };
+    let out = oidc_client(&token.region)
+        .await
+        .create_token()
+        .client_id(client_id)
+        .client_secret(client_secret)
+        .grant_type("refresh_token")
+        .refresh_token(refresh_token)
+        .send()
+        .await
+        .map_err(map_sdk_error)?;
+    let access_token = out
+        .access_token()
+        .ok_or_else(|| Error::Aws("SSO returned no access token on refresh".into()))?
+        .to_string();
+    let expires_at = expiry_from_now(out.expires_in())?;
+    let renewed = CachedToken {
+        access_token,
+        expires_at,
+        // AWS may rotate the refresh token; keep the old one if it did not.
+        refresh_token: out
+            .refresh_token()
+            .map(str::to_string)
+            .or_else(|| token.refresh_token.clone()),
+        ..token.clone()
+    };
+    write_cached_token(session, &renewed)?;
+    linfo!(
+        crate::logging::cat::SSO,
+        "renewed the '{session}' SSO token silently; valid until {}",
+        renewed.expires_at
+    );
+    Ok(renewed)
 }
 
 /// Sign-in state for a cache key, regardless of whether a profile uses it.
@@ -110,28 +250,17 @@ pub fn status_for_key(key: &str) -> Result<SsoStatus> {
             has_token: false,
             expired: true,
             expires_at: None,
+            refreshable: false,
         });
     };
+    let refreshable = can_refresh(&token);
     Ok(SsoStatus {
         applicable: true,
         has_token: true,
-        expired: is_expired(&token),
+        expired: is_expired(&token) && !refreshable,
         expires_at: Some(token.expires_at.clone()),
+        refreshable,
     })
-}
-
-/// A valid, unexpired access token for a session, or an auth error naming the
-/// session so the UI can offer the right sign-in.
-pub fn require_token(session: &str) -> Result<String> {
-    let token = read_token_by_key(session)?.ok_or_else(|| {
-        Error::Auth(format!("Not signed in to the '{session}' SSO session"))
-    })?;
-    if is_expired(&token) {
-        return Err(Error::Auth(format!(
-            "The '{session}' SSO session has expired — sign in again"
-        )));
-    }
-    Ok(token.access_token)
 }
 
 pub fn sso_status(profile: &AwsProfile) -> Result<SsoStatus> {
@@ -141,6 +270,7 @@ pub fn sso_status(profile: &AwsProfile) -> Result<SsoStatus> {
             has_token: false,
             expired: false,
             expires_at: None,
+            refreshable: false,
         });
     }
     match profile.token_cache_key() {
@@ -150,6 +280,7 @@ pub fn sso_status(profile: &AwsProfile) -> Result<SsoStatus> {
             has_token: false,
             expired: true,
             expires_at: None,
+            refreshable: false,
         }),
     }
 }
@@ -223,9 +354,7 @@ pub async fn begin_login(profile: &AwsProfile) -> Result<PendingLogin> {
         .sso_region
         .clone()
         .or_else(|| profile.region.clone())
-        .ok_or_else(|| {
-            Error::Invalid(format!("Profile '{}' has no sso_region", profile.name))
-        })?;
+        .ok_or_else(|| Error::Invalid(format!("Profile '{}' has no sso_region", profile.name)))?;
 
     let cache_key = profile
         .token_cache_key()
@@ -251,13 +380,7 @@ pub async fn begin_login_with(
     let sso_region = sso_region.to_string();
     let cache_key = cache_key.to_string();
 
-    // The OIDC endpoints are unauthenticated, so no credentials are needed here.
-    let cfg = aws_config::defaults(BehaviorVersion::latest())
-        .region(aws_config::Region::new(sso_region.clone()))
-        .no_credentials()
-        .load()
-        .await;
-    let client = aws_sdk_ssooidc::Client::new(&cfg);
+    let client = oidc_client(&sso_region).await;
 
     let registration = client
         .register_client()
@@ -306,7 +429,11 @@ pub async fn begin_login_with(
             user_code,
             expires_in: device.expires_in(),
             // AWS returns 0 when it has no preference; 5s is the CLI's default.
-            interval: if device.interval() > 0 { device.interval() } else { 5 },
+            interval: if device.interval() > 0 {
+                device.interval()
+            } else {
+                5
+            },
         },
         client_id,
         client_secret,
@@ -315,7 +442,10 @@ pub async fn begin_login_with(
             registration.client_secret_expires_at(),
         )
         .ok()
-            .and_then(|dt| dt.format(&time::format_description::well_known::Rfc3339).ok()),
+        .and_then(|dt| {
+            dt.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        }),
         start_url,
         sso_region,
         cache_key,
@@ -325,12 +455,7 @@ pub async fn begin_login_with(
 /// Poll `CreateToken` until the user approves in the browser, then persist the
 /// token in the AWS CLI's cache format.
 pub async fn poll_for_token(pending: PendingLogin) -> Result<CachedToken> {
-    let cfg = aws_config::defaults(BehaviorVersion::latest())
-        .region(aws_config::Region::new(pending.sso_region.clone()))
-        .no_credentials()
-        .load()
-        .await;
-    let client = aws_sdk_ssooidc::Client::new(&cfg);
+    let client = oidc_client(&pending.sso_region).await;
 
     let mut interval = std::time::Duration::from_secs(pending.authorization.interval as u64);
     let deadline = std::time::Instant::now()
@@ -361,11 +486,7 @@ pub async fn poll_for_token(pending: PendingLogin) -> Result<CachedToken> {
                     .ok_or_else(|| Error::Aws("SSO returned no access token".into()))?
                     .to_string();
 
-                let expires_at = OffsetDateTime::now_utc()
-                    + time::Duration::seconds(out.expires_in() as i64);
-                let expires_at = expires_at
-                    .format(&time::format_description::well_known::Rfc3339)
-                    .map_err(Error::internal)?;
+                let expires_at = expiry_from_now(out.expires_in())?;
 
                 let token = CachedToken {
                     start_url: pending.start_url.clone(),
@@ -403,7 +524,6 @@ pub async fn poll_for_token(pending: PendingLogin) -> Result<CachedToken> {
     }
 }
 
-
 /// Fall back to the AWS CLI when the native flow cannot run.
 ///
 /// Used when the profile shape is one we do not model (e.g. a
@@ -437,7 +557,11 @@ pub async fn login_via_cli(profile_name: &str) -> Result<String> {
     } else {
         Err(Error::Auth(format!(
             "`aws sso login --profile {profile_name}` failed: {}",
-            if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() }
+            if stderr.trim().is_empty() {
+                stdout.trim()
+            } else {
+                stderr.trim()
+            }
         )))
     }
 }

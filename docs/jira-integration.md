@@ -14,8 +14,8 @@ fix it without retyping any of it.
 | --- | --- |
 | Deployment | Jira Cloud (`*.atlassian.net`) |
 | Auth | OAuth 2.0 (3LO) in the system browser; the work IdP handles SSO |
-| Team model | One Jira project per pod — routing maps an event `source` to a project key |
-| Entry points | Per issue in the Analysis panel, and bulk from the Health report |
+| Team model | One Jira project per pod — routing maps an event `source` to a project key, or the owning team or repository when no source rule says |
+| Entry points | Per issue in the Analysis panel; bulk from the Health report, including types with no schema; per hit in Watch |
 | REST version | v2, not v3 |
 
 ### Why v2
@@ -89,6 +89,36 @@ Scopes: `read:jira-work write:jira-work read:jira-user offline_access`.
 5. **Bulk.** Select failing schemas in the Health report, group by source,
    preview exactly what will be created and what was skipped as already filed,
    then create in one batch with per-row results.
+
+## Every discrepancy is fileable
+
+A ticket can be filed from every place Pontifex shows the bus disagreeing with
+the registry, not only from a graded schema:
+
+- **A schema that is wrong or drifting** — per issue in the Analysis panel,
+  and in bulk from the Health report.
+- **A type with no schema at all** — the Health report's *on the bus with no
+  schema* rows select for bulk filing like any other. The issue kind is
+  `unregistered`: one row per type, saying that the source publishes it and
+  the registry has nothing for it, with an example payload. Bulk filing
+  pre-selects these along with the rejected ones — the absence is the whole
+  finding.
+- **A single event caught by a watch** — *Check against schema* on an
+  expanded hit validates that one payload against the registered schema and
+  lists what disagrees, or says there is no schema. Each problem files with
+  the hit's environment and log group as context.
+
+## Routing by owner
+
+A source rule needs someone to have written it. The origin lookup already
+knows who publishes a type — the CODEOWNERS team and the repository of the
+file that puts it on the bus — so a second table in Settings → Jira routes by
+those: `@acme/payments → PAY`, `acme/billing-* → BILL`. It is consulted only
+when no source rule matches, and only for types whose origin has been looked
+up; the cache is read, never GitHub, so a preview costs nothing extra. The
+ticket body gains a *Publisher* section naming the file, the owners, and who
+first published the type in which pull request. Filing falls through to the
+default project as before when neither table matches.
 
 ## Fields a project demands
 

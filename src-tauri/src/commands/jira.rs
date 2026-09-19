@@ -169,8 +169,7 @@ pub async fn set_jira_app(
 #[tauri::command]
 pub async fn jira_connect(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<Site>> {
     let (client_id, secret) = credentials(&state).await?;
-    let callback =
-        oauth::parse_callback(&state.settings_snapshot().await.jira.callback_url)?;
+    let callback = oauth::parse_callback(&state.settings_snapshot().await.jira.callback_url)?;
 
     // Bind before opening the browser: a consent that completes instantly must
     // not arrive before anything is listening.
@@ -201,8 +200,8 @@ pub async fn jira_connect(app: tauri::AppHandle, state: State<'_, AppState>) -> 
 }
 
 fn select_site_inner(cloud_id: String, site: Option<Site>) -> Result<()> {
-    let mut stored = tokens::load_tokens()?
-        .ok_or_else(|| Error::Auth("Not connected to Jira.".into()))?;
+    let mut stored =
+        tokens::load_tokens()?.ok_or_else(|| Error::Auth("Not connected to Jira.".into()))?;
     stored.cloud_id = Some(cloud_id);
     stored.site_url = site.as_ref().map(|s| s.url.clone());
     stored.site_name = site.as_ref().map(|s| s.name.clone());
@@ -324,6 +323,20 @@ pub struct TicketPreview {
     pub existing: Option<FiledTicket>,
 }
 
+/// Fill in who publishes the event, from the origin cache, when a lookup
+/// has run for the type. Never a network call: a ticket must file with or
+/// without the origin story, and the cache is the only source cheap enough
+/// to consult on every preview.
+async fn fill_origin(state: &AppState, org: Option<&str>, context: &mut TicketContext) {
+    if context.origin.is_some() {
+        return;
+    }
+    context.origin =
+        crate::commands::origin::cached_origin(state, org, &context.source, &context.detail_type)
+            .await
+            .and_then(|origin| ticket::TicketOrigin::from_origin(&origin));
+}
+
 /// Render a ticket without filing it. No network unless a dedupe check is possible.
 #[tauri::command]
 pub async fn preview_jira_ticket(
@@ -331,6 +344,9 @@ pub async fn preview_jira_ticket(
     request: TicketRequest,
 ) -> Result<TicketPreview> {
     let settings = state.settings_snapshot().await;
+    let mut request = request;
+    let org = crate::commands::origin::resolve_org(&settings).await;
+    fill_origin(&state, org.as_deref(), &mut request.context).await;
     let draft = ticket::draft(&request.issue, &request.context, &settings.jira)?;
 
     // Best-effort: a preview must still render when Jira is unreachable, or a
@@ -395,16 +411,28 @@ async fn file_one(
     settings: &crate::settings::Settings,
     request: &FileTicketRequest,
 ) -> Result<(FileOutcome, FiledTicket)> {
-    let mut draft = ticket::draft(&request.ticket.issue, &request.ticket.context, &settings.jira)?;
+    let mut draft = ticket::draft(
+        &request.ticket.issue,
+        &request.ticket.context,
+        &settings.jira,
+    )?;
 
     // Edits from the preview win: what was on screen is what gets filed.
     if let Some(summary) = request.summary.as_ref().filter(|s| !s.trim().is_empty()) {
         draft.summary = summary.clone();
     }
-    if let Some(description) = request.description.as_ref().filter(|s| !s.trim().is_empty()) {
+    if let Some(description) = request
+        .description
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+    {
         draft.description = description.clone();
     }
-    if let Some(project) = request.project_key.as_ref().filter(|s| !s.trim().is_empty()) {
+    if let Some(project) = request
+        .project_key
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+    {
         let project = project.trim();
         if project != draft.project_key {
             // Field defaults belong to the project, not to the routing rule
@@ -469,6 +497,9 @@ pub async fn file_jira_ticket(
 
     // A single filing surfaces its failure as an error, so the dialog can show
     // it where the button was pressed — unlike a bulk run, which reports per row.
+    let mut request = request;
+    let org = crate::commands::origin::resolve_org(&settings).await;
+    fill_origin(&state, org.as_deref(), &mut request.ticket.context).await;
     let (outcome, ticket) = file_one(&client, &settings, &request).await?;
     log::info!(target: cat::JIRA, "filed {} for {schema_name} ({issue_key})", ticket.key);
 
@@ -492,6 +523,11 @@ pub async fn file_jira_tickets(
 ) -> Result<Vec<FileTicketResult>> {
     let client = client(&state).await?;
     let settings = state.settings_snapshot().await;
+    let mut requests = requests;
+    let org = crate::commands::origin::resolve_org(&settings).await;
+    for request in &mut requests {
+        fill_origin(&state, org.as_deref(), &mut request.ticket.context).await;
+    }
     // The duplicate checks are independent reads, so they run together; a
     // twenty-schema run spent most of its wall clock waiting for them one at a
     // time. The writes stay sequential — creating twenty tickets in parallel
@@ -499,9 +535,13 @@ pub async fn file_jira_tickets(
     let fingerprints: Vec<Option<String>> = requests
         .iter()
         .map(|request| {
-            ticket::draft(&request.ticket.issue, &request.ticket.context, &settings.jira)
-                .ok()
-                .map(|draft| draft.fingerprint)
+            ticket::draft(
+                &request.ticket.issue,
+                &request.ticket.context,
+                &settings.jira,
+            )
+            .ok()
+            .map(|draft| draft.fingerprint)
         })
         .collect();
 

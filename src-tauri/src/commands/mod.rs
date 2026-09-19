@@ -3,6 +3,7 @@ pub mod bedrock;
 pub mod devtools;
 pub mod jira;
 pub mod logs;
+pub mod origin;
 pub mod reality;
 pub mod schemas;
 pub mod settings;

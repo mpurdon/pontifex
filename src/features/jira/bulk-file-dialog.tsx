@@ -87,10 +87,17 @@ export function BulkFileDialog({
     [candidates.data],
   )
 
-  // Default to the ones that are actually costing events, so hitting File
-  // straight away does the defensible thing.
+  // Default to the ones that are actually costing events — and to the types
+  // with no schema at all, which is the whole finding for such a row — so
+  // hitting File straight away does the defensible thing.
   useEffect(() => {
-    setChosen(new Set(rows.filter((r) => r.issue.rejects).map((r) => r.id)))
+    setChosen(
+      new Set(
+        rows
+          .filter((r) => r.issue.rejects || r.issue.kind === 'unregistered')
+          .map((r) => r.id),
+      ),
+    )
     setResults(null)
   }, [rows])
 
@@ -186,6 +193,9 @@ export function BulkFileDialog({
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
                       {row.issue.rejects && <Badge tone="danger">rejected today</Badge>}
+                      {row.issue.kind === 'unregistered' && (
+                        <Badge tone="warn">no schema</Badge>
+                      )}
                       <span className="whitespace-nowrap text-[10px] text-ink-faint">
                         {row.issue.affected}/{row.issue.sampled}
                       </span>

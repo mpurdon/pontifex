@@ -32,6 +32,7 @@ function settings(overrides: Partial<Settings>): Settings {
       claudeSettingsPath: null,
     },
     scan: { maxSeconds: 30, maxEvents: 5000, cacheMb: 32 },
+    github: { org: null, ignore: [] },
     jira: {
       clientId: '',
       callbackUrl: 'http://127.0.0.1:53682/callback',

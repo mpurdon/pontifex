@@ -15,6 +15,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
+import { KIND_LABELS } from '@/lib/issues'
 import type {
   FieldObservation,
   FiledTicket,
@@ -101,6 +102,28 @@ export function AnalysisPanel({
 }) {
   const [minutes, setMinutes] = useState(1440)
   const [result, setResult] = useState<RealityCheckResult | null>(null)
+  /** When the result on screen was run, so its age can be shown. */
+  const [analysedAt, setAnalysedAt] = useState<number | null>(null)
+
+  /**
+   * The last analysis run for this schema, from disk. Coming back to a schema
+   * shows what was found last time and when, and Run re-scans when a fresher
+   * answer matters.
+   */
+  const cached = useQuery({
+    queryKey: ['analysis', envId, schemaName],
+    queryFn: () => ipc.cachedAnalysis(schemaName, envId),
+    enabled: !!envId,
+    staleTime: Infinity,
+    retry: false,
+  })
+  useEffect(() => {
+    if (result || !cached.data) return
+    setResult(cached.data.result)
+    setAnalysedAt(cached.data.analysedAt)
+    onCoverage(cached.data.result.coverage, cached.data.result.sampled)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cached.data])
   const [live, setLive] = useState(true)
   /** What has been dealt with this session, keyed by issue. */
   const [resolved, setResolved] = useState<Record<string, Resolution>>({})
@@ -132,10 +155,20 @@ export function AnalysisPanel({
   const check = useMutation<RealityCheckResult, IpcError, boolean | void>({
     mutationFn: (refresh) =>
       ipc.checkAgainstEvents(
-        { name: schemaName, content: document, minutes, limit: 300, refresh: !!refresh },
+        {
+          name: schemaName,
+          content: document,
+          minutes,
+          limit: 300,
+          refresh: !!refresh,
+          persist: true,
+        },
         envId,
       ),
-    onSuccess: receive,
+    onSuccess: (next) => {
+      receive(next)
+      setAnalysedAt(Date.now())
+    },
   })
 
   /**
@@ -303,9 +336,22 @@ export function AnalysisPanel({
             size="sm"
             loading={check.isPending}
             onClick={() => check.mutate()}
+            title={
+              analysedAt
+                ? `Last run ${formatAge(Date.now() - analysedAt)} ago — run again for a fresh answer`
+                : 'Check this schema against real events'
+            }
           >
             Run
           </Button>
+          {analysedAt && (
+            <span
+              className="text-[10px] text-ink-faint"
+              title={`Analysed ${new Date(analysedAt).toLocaleString()}. Kept for 30 days.`}
+            >
+              analysed {formatAge(Date.now() - analysedAt)} ago
+            </span>
+          )}
 
           {result && (
             <Button
@@ -517,15 +563,6 @@ export function AnalysisPanel({
   )
 }
 
-/** What each kind of issue is called, in the reader's terms. */
-const KIND_LABELS: Record<IssueKind, string> = {
-  wrongType: 'wrong type',
-  outsideEnum: 'value not allowed',
-  missingRequired: 'required field missing',
-  undeclared: 'undeclared field',
-  neverSeen: 'never seen',
-  rejected: 'rejected',
-}
 
 const SEVERITY_STYLES: Record<
   IssueSeverity,

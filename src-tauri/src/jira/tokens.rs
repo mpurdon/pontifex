@@ -7,7 +7,8 @@
 //! Two entries rather than one: the client secret is configuration that
 //! survives a sign-out, and the tokens are a session that does not.
 
-use crate::error::{Error, Result};
+use crate::error::Result;
+use crate::keychain::Keychain;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -35,8 +36,7 @@ struct Remembered {
 }
 
 fn remembered() -> &'static std::sync::RwLock<Remembered> {
-    static CACHE: std::sync::OnceLock<std::sync::RwLock<Remembered>> =
-        std::sync::OnceLock::new();
+    static CACHE: std::sync::OnceLock<std::sync::RwLock<Remembered>> = std::sync::OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
@@ -81,51 +81,7 @@ impl StoredTokens {
     }
 }
 
-fn entry(name: &str) -> Result<keyring::Entry> {
-    keyring::Entry::new(SERVICE, name)
-        .map_err(|e| Error::Internal(format!("Cannot reach the OS keychain: {e}")))
-}
-
-/// A keychain refusal, said in terms of what to do about it.
-///
-/// The platform message for a denied or mis-answered access dialog is "the
-/// user name or passphrase you entered is not correct", which sounds like the
-/// Jira credentials are wrong when nothing about Jira is involved. Every build
-/// is a new binary to the keychain, so the dialog reappears after a rebuild
-/// and this is the failure you get for dismissing it.
-fn keychain_error(action: &str, e: keyring::Error) -> Error {
-    let advice = match &e {
-        keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_) => {
-            " — macOS asks permission the first time a new build touches this item. \
-             Try again and choose “Always Allow”. If it keeps refusing, clear the item with \
-             `security delete-generic-password -s pontifex.jira` and enter the secret again."
-        }
-        _ => "",
-    };
-    Error::Internal(format!("Cannot {action} the OS keychain: {e}{advice}"))
-}
-
-/// Read a keychain entry, treating "not there" as `None` rather than an error.
-fn read(name: &str) -> Result<Option<String>> {
-    match entry(name)?.get_password() {
-        Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(keychain_error("read", e)),
-    }
-}
-
-fn write(name: &str, value: &str) -> Result<()> {
-    entry(name)?
-        .set_password(value)
-        .map_err(|e| keychain_error("write to", e))
-}
-
-fn clear(name: &str) -> Result<()> {
-    match entry(name)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(keychain_error("clear", e)),
-    }
-}
+const KEYCHAIN: Keychain = Keychain::new(SERVICE);
 
 pub fn load_tokens() -> Result<Option<StoredTokens>> {
     if let Some(Some(hit)) = with_cache(|cache| cache.tokens.clone()) {
@@ -134,19 +90,21 @@ pub fn load_tokens() -> Result<Option<StoredTokens>> {
 
     // A keychain entry written by an older build is not worth failing over —
     // it means "sign in again", which is what `None` already says.
-    let stored = read(TOKENS_ENTRY)?.and_then(|raw| serde_json::from_str(&raw).ok());
+    let stored = KEYCHAIN
+        .read(TOKENS_ENTRY)?
+        .and_then(|raw| serde_json::from_str(&raw).ok());
     update_cache(|cache| cache.tokens = Some(stored.clone()));
     Ok(stored)
 }
 
 pub fn save_tokens(tokens: &StoredTokens) -> Result<()> {
-    write(TOKENS_ENTRY, &serde_json::to_string(tokens)?)?;
+    KEYCHAIN.write(TOKENS_ENTRY, &serde_json::to_string(tokens)?)?;
     update_cache(|cache| cache.tokens = Some(Some(tokens.clone())));
     Ok(())
 }
 
 pub fn clear_tokens() -> Result<()> {
-    clear(TOKENS_ENTRY)?;
+    KEYCHAIN.clear(TOKENS_ENTRY)?;
     update_cache(|cache| cache.tokens = Some(None));
     Ok(())
 }
@@ -156,19 +114,19 @@ pub fn load_client_secret() -> Result<Option<String>> {
         return Ok(hit);
     }
 
-    let secret = read(SECRET_ENTRY)?;
+    let secret = KEYCHAIN.read(SECRET_ENTRY)?;
     update_cache(|cache| cache.secret = Some(secret.clone()));
     Ok(secret)
 }
 
 pub fn save_client_secret(secret: &str) -> Result<()> {
-    write(SECRET_ENTRY, secret)?;
+    KEYCHAIN.write(SECRET_ENTRY, secret)?;
     update_cache(|cache| cache.secret = Some(Some(secret.to_string())));
     Ok(())
 }
 
 pub fn clear_client_secret() -> Result<()> {
-    clear(SECRET_ENTRY)?;
+    KEYCHAIN.clear(SECRET_ENTRY)?;
     update_cache(|cache| cache.secret = Some(None));
     Ok(())
 }

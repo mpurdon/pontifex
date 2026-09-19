@@ -20,9 +20,14 @@ import {
   Gauge,
   RefreshCw,
   X,
+  Bug,
+  CheckCircle2,
+  ShieldCheck,
 } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
-import type { CompiledWatch, IpcError, NotifierOutcome, Watch, WatchCondition, WatchHit, WatchMark, WatchProbe, WatchStatus } from '@/lib/types'
+import type { CompiledWatch, Environment, FiledTicket, IpcError, Issue, NotifierOutcome, Watch, WatchCondition, WatchHit, WatchMark, WatchProbe, WatchStatus } from '@/lib/types'
+import { KIND_LABELS, SEVERITY_TONE } from '@/lib/issues'
+import { FileTicketDialog, FiledChip } from '@/features/jira/file-ticket-dialog'
 import { formatAge, formatTime, stringify } from '@/lib/format'
 import {
   Badge,
@@ -31,6 +36,7 @@ import {
   CopyButton,
   EmptyState,
   ErrorBox,
+  Marked,
   Field,
   Input,
   Note,
@@ -43,6 +49,7 @@ import {
 import { useSettings } from '@/app/settings-context'
 import { useLoginForEnvironment } from '@/app/login-dialog'
 import { upsertStatus, useNow, useWatchStatuses, watchKeys } from './use-watch-events'
+import { OriginPanel } from '@/features/origin/origin-panel'
 
 /**
  * The poll-interval ladder: fine steps at the fast end, coarser toward the
@@ -510,6 +517,7 @@ export function WatchPage() {
                           : null
                       }
                       schemasKnown={schemas.isSuccess}
+                      environment={activeEnvironment}
                       isNew={row.hit.receivedAt > (openedAt.current ?? 0)}
                       expanded={expanded.has(row.hit.id)}
                       onToggle={() => toggle(row.hit.id)}
@@ -1502,6 +1510,7 @@ function HitRow({
   color,
   schemaName,
   schemasKnown,
+  environment,
   isNew,
   expanded,
   onToggle,
@@ -1512,6 +1521,7 @@ function HitRow({
   schemaName: string | null
   /** False while the registry list is still loading, so neither action is offered yet. */
   schemasKnown: boolean
+  environment: Environment
   isNew: boolean
   expanded: boolean
   onToggle: () => void
@@ -1600,12 +1610,138 @@ function HitRow({
               <span>{hit.logGroup}</span>
               <span>seen {formatTime(hit.receivedAt)}</span>
             </div>
-            <pre className="max-h-80 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-ink-muted">
-              {stringify(hit.event)}
-            </pre>
+            <div className="flex min-w-0 flex-col gap-2 p-2 md:flex-row">
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                <pre className="max-h-80 min-w-0 overflow-auto rounded-md border border-edge/60 p-3 font-mono text-[11px] leading-relaxed text-ink-muted">
+                  {stringify(hit.event)}
+                </pre>
+                {identity && schemasKnown && (
+                  <HitCheck hit={hit} identity={identity} environment={environment} />
+                )}
+              </div>
+              {identity && (
+                <div className="w-full shrink-0 rounded-md border border-edge/60 md:w-[420px]">
+                  <OriginPanel schemaName={identity} compact />
+                </div>
+              )}
+            </div>
           </td>
         </tr>
       )}
     </>
+  )
+}
+
+/**
+ * This one event against its schema, with a ticket one click away.
+ *
+ * A hit is a discrepancy caught live, and the Health report is a day away.
+ * Checking here answers "is this payload what the schema promised?" for the
+ * event in front of you, and files the answer with whoever owns the producer
+ * — no schema at all being as fileable as a wrong field.
+ */
+function HitCheck({
+  hit,
+  identity,
+  environment,
+}: {
+  hit: WatchHit
+  identity: string
+  environment: Environment
+}) {
+  const [issues, setIssues] = useState<Issue[] | null>(null)
+  const [error, setError] = useState<IpcError | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [filing, setFiling] = useState<Issue | null>(null)
+  const [filed, setFiled] = useState<Record<string, FiledTicket>>({})
+
+  // A plain promise rather than useMutation: the rows mount and unmount as the
+  // list scrolls, and a mutation observer orphaned by StrictMode never
+  // reports back (see the schemas page).
+  const check = async () => {
+    setChecking(true)
+    setError(null)
+    try {
+      setIssues(await ipc.validateEvent(identity, hit.event, hit.envId))
+    } catch (e) {
+      setError(ipc.asIpcError(e))
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  const context = {
+    schemaName: identity,
+    environment: environment.label,
+    registry: environment.registryName,
+    source: hit.source ?? '',
+    detailType: hit.detailType ?? '',
+    logGroup: hit.logGroup,
+    minutes: null,
+    typeName: null,
+  }
+
+  return (
+    <div className="rounded-md border border-edge/60 p-2 text-[11px]">
+      <div className="flex items-center gap-2">
+        <Button variant="ghost" size="sm" onClick={check} disabled={checking}>
+          {checking ? <Spinner /> : <ShieldCheck className="size-3" />}
+          {issues ? 'Check again' : 'Check against schema'}
+        </Button>
+        {issues && issues.length === 0 && (
+          <span className="flex items-center gap-1 text-ok">
+            <CheckCircle2 className="size-3" />
+            matches the schema
+          </span>
+        )}
+        {issues && issues.length > 0 && (
+          <span className="text-ink-faint">
+            {issues.length} problem{issues.length === 1 ? '' : 's'} — file one to whoever owns
+            the producer
+          </span>
+        )}
+      </div>
+      {error && (
+        <div className="mt-2">
+          <ErrorBox error={error} />
+        </div>
+      )}
+      {issues && issues.length > 0 && (
+        <ul className="mt-2 flex flex-col gap-1">
+          {issues.map((issue) => (
+            <li
+              key={issue.key}
+              className="flex items-start gap-2 rounded border border-edge/60 px-2 py-1"
+            >
+              <Badge tone={SEVERITY_TONE[issue.severity]}>{KIND_LABELS[issue.kind]}</Badge>
+              <span className="min-w-0 flex-1 text-ink-muted">
+                {issue.path && <span className="mr-1 font-mono text-ink">{issue.path}</span>}
+                <Marked text={issue.summary} />
+              </span>
+              {filed[issue.key] ? (
+                <FiledChip ticket={filed[issue.key]} />
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  title="File a Jira ticket for this"
+                  onClick={() => setFiling(issue)}
+                >
+                  <Bug className="size-3" />
+                  File
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <FileTicketDialog
+        open={!!filing}
+        issue={filing}
+        context={context}
+        onClose={() => setFiling(null)}
+        onFiled={(issueKey, ticket) => setFiled((prev) => ({ ...prev, [issueKey]: ticket }))}
+      />
+    </div>
   )
 }

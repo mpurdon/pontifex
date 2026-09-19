@@ -52,7 +52,10 @@ import type {
   Topology,
   ValidationReport,
   Watch,
+  CachedAnalysis,
   CompiledWatch,
+  EventOrigin,
+  GithubStatus,
   NotifierOutcome,
   WatchHit,
   WatchMark,
@@ -362,6 +365,10 @@ export const checkAgainstEvents = (
   envId?: string,
 ) => invoke<RealityCheckResult>('check_against_events', { request, envId })
 
+/** The schema's last persisted analysis, if one was run in the last month. */
+export const cachedAnalysis = (name: string, envId?: string) =>
+  invoke<CachedAnalysis | null>('cached_analysis', { name, envId })
+
 /**
  * Event sources known from sampled traffic, with the spelling a routing rule
  * has to match. Reads the cache, so it costs no AWS call.
@@ -555,6 +562,15 @@ export const issuesForSchemas = (
 ) =>
   invoke<SchemaIssues[]>('issues_for_schemas', { names, minutes, logGroup, envId })
 
+/**
+ * Check one caught event against the schema registered for its type.
+ *
+ * A type with no schema comes back as a single `unregistered` issue rather
+ * than an error: that absence is the finding.
+ */
+export const validateEvent = (name: string, event: unknown, envId?: string) =>
+  invoke<Issue[]>('validate_event', { name, event, envId })
+
 // --- watch mode -----------------------------------------------------------
 
 export const listWatches = (envId?: string) =>
@@ -614,3 +630,21 @@ export const pollNow = (envId?: string) => invoke<void>('poll_now', { envId })
 /** Run a watch's pattern over the last `hours`, sampled across the whole window. */
 export const probeWatch = (watch: Watch, hours?: number) =>
   invoke<WatchProbe>('probe_watch', { watch, hours })
+
+// --- origin ---------------------------------------------------------------
+
+/** Where an event type came from: who wired it in and who publishes it. Cached a week unless `refresh`. */
+export const eventOrigin = (name: string, refresh?: boolean, limit?: number) =>
+  withTimeout(
+    invoke<EventOrigin>('event_origin', { name, refresh, limit }),
+    180_000,
+    'Looking up the origin',
+  )
+
+export const githubStatus = () => invoke<GithubStatus>('github_status')
+
+/** Store a personal access token in the keychain; empty clears it. */
+export const setGithubToken = (token: string) => invoke<void>('set_github_token', { token })
+
+/** Who the current token authenticates as. */
+export const githubCheck = () => invoke<string>('github_check')

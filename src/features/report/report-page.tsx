@@ -43,10 +43,12 @@ import { BulkFileDialog } from '@/features/jira/bulk-file-dialog'
 /**
  * Statuses worth filing a ticket about.
  *
- * `ok` and `noTraffic` have nothing for a producer team to fix, and `missing`
- * means no schema exists — that is our job to draft, not theirs to fix.
+ * `ok` and `noTraffic` have nothing for a producer team to fix. `missing`
+ * is fileable too: a type on the bus with no schema is the producer's
+ * contract left unwritten, and the ticket asks for it — Pontifex can draft
+ * one from traffic, but the owner has to own it.
  */
-const FILEABLE = new Set<FilterStatus>(['failing', 'drifting', 'error'])
+const FILEABLE = new Set<FilterStatus>(['failing', 'drifting', 'error', 'missing'])
 
 /**
  * A table row: either a graded schema, or an event type with no schema.
@@ -265,7 +267,7 @@ export function ReportPage() {
 
   /** Rows with something a producer team could act on. */
   const fileable = useMemo(
-    () => visible.filter((row) => FILEABLE.has(row.status) && !row.missing),
+    () => visible.filter((row) => FILEABLE.has(row.status)),
     [visible],
   )
 
@@ -520,7 +522,7 @@ export function ReportPage() {
                     <Row
                       key={row.name}
                       row={row}
-                      selectable={FILEABLE.has(row.status) && !row.missing}
+                      selectable={FILEABLE.has(row.status)}
                       selected={selected.has(row.name)}
                       onSelect={toggleSelected}
                       onOpen={openRow}

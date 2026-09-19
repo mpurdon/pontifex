@@ -48,6 +48,7 @@ import {
 import { countChanges, diffTrees, type ChangeStatus } from '@/lib/schema-diff'
 import type { FieldHistory } from '@/lib/schema-history'
 import { AnalysisPanel } from './analysis-panel'
+import { OriginPanel } from '@/features/origin/origin-panel'
 import type { PanelImperativeHandle } from 'react-resizable-panels'
 import {
   ResizableGroup,
@@ -70,7 +71,7 @@ const CHANGE_BADGES: {
 ]
 
 /** The three things the right-hand column can show about the tree. */
-type SideTab = 'details' | 'sample' | 'analysis'
+type SideTab = 'details' | 'analysis' | 'origin' | 'sample'
 
 /** Every id from the root down to `target`, so revealing a node is one call. */
 function pathTo(root: SchemaNode, targetId: string): string[] | null {
@@ -296,9 +297,37 @@ export function SchemaEditor({
     )
   }
 
-  // Analysis needs a registry name to sample against; without one the tab
-  // would be a dead end, so the column falls back to the inspector.
-  const activeTab: SideTab = sideTab === 'analysis' && !schemaName ? 'details' : sideTab
+  const sideTabs: { id: SideTab; label: string; title: string; disabled?: boolean }[] = [
+    {
+      id: 'details',
+      label: 'Details',
+      title: 'The selected field’s type, description and constraints',
+    },
+    {
+      id: 'analysis',
+      label: 'Analysis',
+      disabled: !schemaName,
+      title: schemaName
+        ? 'Compare this schema with events actually on the bus'
+        : 'Needs a schema in the registry to sample against',
+    },
+    {
+      id: 'origin',
+      label: 'Origin',
+      disabled: !schemaName,
+      title: schemaName
+        ? 'Who wired this event type in, and who publishes it'
+        : 'Needs a schema in the registry to look up',
+    },
+    // Last: a generated example is the fallback for when there is no real
+    // event to look at, and Analysis shows real ones.
+    { id: 'sample', label: 'Sample', title: 'Preview a generated sample event' },
+  ]
+  // A tab that needs a registry name would be a dead end without one, so the
+  // column falls back to the inspector.
+  const activeTab: SideTab = sideTabs.find((t) => t.id === sideTab)?.disabled
+    ? 'details'
+    : sideTab
 
   const treePane = (
     <div className="min-h-0 flex-1 overflow-auto" role="tree">
@@ -557,22 +586,7 @@ export function SchemaEditor({
           <Segmented
             size="sm"
             value={activeTab}
-            options={[
-              {
-                id: 'details',
-                label: 'Details',
-                title: 'The selected field’s type, description and constraints',
-              },
-              { id: 'sample', label: 'Sample', title: 'Preview a sample event' },
-              {
-                id: 'analysis',
-                label: 'Analysis',
-                disabled: !schemaName,
-                title: schemaName
-                  ? 'Compare this schema with events actually on the bus'
-                  : 'Needs a schema in the registry to sample against',
-              },
-            ]}
+            options={sideTabs}
             onChange={selectTab}
           />
         </div>
@@ -639,6 +653,14 @@ export function SchemaEditor({
                 busName={busName}
                 region={region}
               />
+            </div>
+          )}
+
+          {/* Mounted only while visible: the lookup is cached, so coming
+              back is instant, and an unopened tab should cost no search. */}
+          {activeTab === 'origin' && schemaName && (
+            <div className="absolute inset-0 overflow-auto">
+              <OriginPanel schemaName={schemaName} compact />
             </div>
           )}
 

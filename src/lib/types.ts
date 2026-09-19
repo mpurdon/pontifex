@@ -103,6 +103,13 @@ export interface SourceRoute {
 }
 
 /**
+ * A routing rule matched against who owns the producer rather than what it is
+ * called: the CODEOWNERS team (`@org/team`) or repository (`org/repo`) the
+ * origin lookup found. Same shape as a source rule.
+ */
+export type OwnerRoute = SourceRoute
+
+/**
  * Everything about Jira that is not a secret.
  *
  * The client secret and OAuth tokens are absent by design — they live in the
@@ -155,6 +162,7 @@ export interface JiraSettings {
   issueType: string
   labels: string[]
   routes: SourceRoute[]
+  ownerRoutes: OwnerRoute[]
   /**
    * Values for fields a project makes mandatory, keyed by project then field id.
    *
@@ -164,12 +172,21 @@ export interface JiraSettings {
   fieldDefaults: Record<string, Record<string, unknown>>
 }
 
+/** Where producer code lives, for the origin lookup. The token is in the keychain or borrowed from the GitHub CLI. */
+export interface GithubSettings {
+  /** Organisation to search; unset reads it from the bus checkout's remote. */
+  org: string | null
+  /** Path globs the origin lookup never examines. CODEOWNERS pattern rules. */
+  ignore: string[]
+}
+
 export interface Settings {
   environments: Environment[]
   activeEnvironmentId: string | null
   llm: LlmSettings
   scan: ScanSettings
   jira: JiraSettings
+  github: GithubSettings
   eventBusRepoPath: string | null
   /** Sources kept at the top of the schema list. */
   pinnedSources: string[]
@@ -229,8 +246,11 @@ export type ProfileKind = 'ssoSession' | 'ssoLegacy' | 'assumeRole' | 'static'
 export interface SsoStatus {
   applicable: boolean
   hasToken: boolean
+  /** Past use and not silently renewable; a lapsed token with a live refresh token is not expired. */
   expired: boolean
   expiresAt: string | null
+  /** The access token renews on its own until the SSO session itself ends. */
+  refreshable: boolean
 }
 
 /** `AwsProfile` flattened together with its `SsoStatus`. */
@@ -471,6 +491,7 @@ export type IssueKind =
   | 'undeclared'
   | 'neverSeen'
   | 'rejected'
+  | 'unregistered'
 
 export type IssueSeverity = 'error' | 'warning' | 'info'
 
@@ -656,6 +677,8 @@ export interface RealityCheckRequest {
   refresh?: boolean
   /** Never touch AWS — validate against cached events only. */
   cachedOnly?: boolean
+  /** Keep the result as the schema's last analysis, shown when it is opened again. */
+  persist?: boolean
   /** Wall-clock ceiling on the CloudWatch scan, in seconds. */
   maxSeconds?: number
 }
@@ -818,6 +841,19 @@ export interface TicketContext {
   logGroup?: string | null
   minutes?: number | null
   typeName?: string | null
+  /** Who publishes it, when the origin lookup has run. Filled in by the backend. */
+  origin?: TicketOrigin | null
+}
+
+/** The publisher, as the origin lookup found it, for the ticket body and routing. */
+export interface TicketOrigin {
+  repo: string
+  path: string
+  url: string
+  owners: string[]
+  introducedBy: string | null
+  pullUrl: string | null
+  publisher: boolean
 }
 
 /** A ticket, fully rendered, before anyone has agreed to create it. */
@@ -998,4 +1034,82 @@ export interface WatchStatus {
   seenAt: number
   /** When this poller started, epoch ms. Older hits are look-back; newer were caught live. */
   watchingSince: number | null
+}
+
+// --- origin ---------------------------------------------------------------
+
+/** A person and a moment, from a commit. */
+export interface Authorship {
+  author: string
+  email: string | null
+  login: string | null
+  /** RFC 3339. */
+  date: string
+  sha: string
+  subject: string
+  commitUrl: string | null
+  pullNumber: number | null
+  pullTitle: string | null
+  pullUrl: string | null
+  /** The pull request's author, when it differs from the commit's. */
+  pullAuthor: string | null
+}
+
+/** One place in the organisation's code that carries the event type. */
+export interface ProducerOrigin {
+  repo: string
+  path: string
+  url: string
+  introduced: Authorship | null
+  owners: string[]
+  /** A test, fixture or document rather than the producer itself. */
+  incidental: boolean
+  /** What the file does with the event type. */
+  role: 'publisher' | 'consumer' | 'mention'
+}
+
+export interface GithubOutcome {
+  status: 'ok' | 'unconfigured' | 'error'
+  message: string | null
+  org: string | null
+  /** Matches the search reported, before the ignore list. */
+  totalMatches: number
+  /** Matches the ignore list kept from being examined. */
+  skipped: number
+  /** Which ones, and by which pattern. */
+  skippedFiles: SkippedMatch[]
+}
+
+export interface SkippedMatch {
+  repo: string
+  path: string
+  url: string
+  /** The ignore-list entry that matched. */
+  pattern: string
+}
+
+export interface EventOrigin {
+  source: string
+  detailType: string
+  /** The commit that wired the type into the bus repo, from the local checkout. */
+  wiring: Authorship | null
+  wiringRepoUrl: string | null
+  producers: ProducerOrigin[]
+  github: GithubOutcome
+  cachedAt: number
+}
+
+export interface GithubStatus {
+  org: string | null
+  orgFromRemote: string | null
+  tokenSource: 'keychain' | 'ghCli' | 'none'
+  /** The ignore list when left alone, for the placeholder and the reset button. */
+  defaultIgnore: string[]
+}
+
+/** A schema's last persisted reality check, kept for a month. */
+export interface CachedAnalysis {
+  result: RealityCheckResult
+  /** When it was run, epoch ms. */
+  analysedAt: number
 }

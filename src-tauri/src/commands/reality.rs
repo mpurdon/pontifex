@@ -42,6 +42,11 @@ pub struct RealityCheckRequest {
     pub cached_only: bool,
     /// Wall-clock ceiling on the CloudWatch scan, in seconds.
     pub max_seconds: Option<u64>,
+    /// Keep the result as the schema's last analysis, shown when the schema
+    /// is opened again. Set by an explicit Run, not by live re-checks of a
+    /// draft as it is typed.
+    #[serde(default)]
+    pub persist: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +79,26 @@ fn detail_type_name(document: &Value, override_name: Option<&str>) -> Result<Str
                 .into(),
         )
     })
+}
+
+/// A registered schema's document and the type its events are checked
+/// against. A registry without the schema is `Error::NotFound`, which some
+/// callers treat as a finding rather than a failure.
+async fn fetch_schema(
+    schemas: &aws_sdk_schemas::Client,
+    registry: &str,
+    name: &str,
+) -> Result<(Value, String)> {
+    let described = schemas
+        .describe_schema()
+        .registry_name(registry)
+        .schema_name(name)
+        .send()
+        .await
+        .map_err(map_sdk_error)?;
+    let content: Value = serde_json::from_str(described.content().unwrap_or("{}"))?;
+    let type_name = detail_type_name(&content, None)?;
+    Ok((content, type_name))
 }
 
 /// Every log group a scan should read, or just the one asked for.
@@ -162,11 +187,41 @@ pub async fn check_against_events(
     request: RealityCheckRequest,
     env_id: Option<String>,
 ) -> Result<RealityCheckResult> {
+    let persist = request.persist;
+    let name = request.name.clone();
+    let result = run_check(&state, request, env_id.as_deref()).await?;
+    if persist {
+        let env = state.resolve_environment(env_id.as_deref()).await?;
+        state
+            .analyses
+            .put(&env.id, &name, serde_json::to_value(&result)?)
+            .await;
+    }
+    Ok(result)
+}
+
+/// The schema's last persisted analysis for this environment, if one was run
+/// in the last month.
+#[tauri::command]
+pub async fn cached_analysis(
+    state: State<'_, AppState>,
+    name: String,
+    env_id: Option<String>,
+) -> Result<Option<crate::analysis_cache::CachedAnalysis>> {
+    let env = state.resolve_environment(env_id.as_deref()).await?;
+    Ok(state.analyses.get(&env.id, &name).await)
+}
+
+async fn run_check(
+    state: &AppState,
+    request: RealityCheckRequest,
+    env_id: Option<&str>,
+) -> Result<RealityCheckResult> {
     let identity = EventIdentity::from_schema_name(&request.name)?;
     let document = model::parse_content(&request.content)?;
     let type_name = detail_type_name(&document, request.type_name.as_deref())?;
 
-    let (env, cfg) = state.env_config(env_id.as_deref()).await?;
+    let (env, cfg) = state.env_config(env_id).await?;
     // Every configured group, because a schema's events may arrive over the
     // bridge rather than directly, and checking only the first reported an
     // external event type as having no traffic at all.
@@ -701,16 +756,7 @@ pub async fn registry_report(
                 let seen = observed.get(&key).copied().unwrap_or(payloads.len());
 
                 let graded = async {
-                    let described = schemas
-                        .describe_schema()
-                        .registry_name(&registry)
-                        .schema_name(&name)
-                        .send()
-                        .await
-                        .map_err(map_sdk_error)?;
-                    let content: Value = serde_json::from_str(described.content().unwrap_or("{}"))
-                        .map_err(Error::from)?;
-                    let type_name = detail_type_name(&content, None)?;
+                    let (content, type_name) = fetch_schema(&schemas, &registry, &name).await?;
                     events::check_events(&content, &type_name, payloads)
                 }
                 .await;
@@ -1276,19 +1322,22 @@ pub async fn issues_for_schemas(
             let log_groups = log_groups.clone();
             let state = &state;
             async move {
-                let gathered = async {
-                    let described = schemas
-                        .describe_schema()
-                        .registry_name(&registry)
-                        .schema_name(&name)
-                        .send()
-                        .await
-                        .map_err(map_sdk_error)?;
-                    let content: Value =
-                        serde_json::from_str(described.content().unwrap_or("{}"))?;
-                    let identity = EventIdentity::from_schema_name(&name)?;
-                    let type_name = detail_type_name(&content, None)?;
+                // One context, then whatever the successful path learned —
+                // two literals side by side drift the moment a field is added.
+                let mut context = crate::jira::ticket::TicketContext {
+                    schema_name: name.clone(),
+                    environment: env.label.clone(),
+                    registry: Some(env.registry_name.clone()),
+                    source: String::new(),
+                    detail_type: String::new(),
+                    log_group: log_groups.first().cloned(),
+                    minutes: Some(minutes as u64),
+                    type_name: None,
+                    origin: None,
+                };
 
+                let gathered = async {
+                    let identity = EventIdentity::from_schema_name(&name)?;
                     // Whichever group the report cached them under.
                     let cached = state
                         .events
@@ -1301,43 +1350,49 @@ pub async fn issues_for_schemas(
                             now,
                         )
                         .await;
-                    let report = events::check_events(&content, &type_name, &cached.payloads)?;
-
+                    // No schema at all is the finding, not a failure to
+                    // report: the type is on the bus and the registry is
+                    // silent on it.
+                    let (type_name, issues) =
+                        match fetch_schema(&schemas, &registry, &name).await {
+                            Ok((content, type_name)) => {
+                                let report =
+                                    events::check_events(&content, &type_name, &cached.payloads)?;
+                                (Some(type_name), report.issues)
+                            }
+                            Err(Error::NotFound(_)) => {
+                                let issue = events::unregistered_issue(
+                                    &identity.source,
+                                    &identity.detail_type,
+                                    cached.payloads.len(),
+                                    cached.payloads.first().cloned(),
+                                );
+                                (None, vec![issue])
+                            }
+                            Err(e) => return Err(e),
+                        };
                     Ok::<_, Error>((
                         identity,
                         type_name,
-                        report,
+                        issues,
                         cached.payloads.len(),
                         cached.found_in,
                     ))
                 }
                 .await;
 
-                // One context, then whatever the successful path learned —
-                // two literals side by side drift the moment a field is added.
-                let mut context = crate::jira::ticket::TicketContext {
-                    schema_name: name.clone(),
-                    environment: env.label.clone(),
-                    registry: Some(env.registry_name.clone()),
-                    source: String::new(),
-                    detail_type: String::new(),
-                    log_group: log_groups.first().cloned(),
-                    minutes: Some(minutes as u64),
-                    type_name: None,
-                };
-
                 match gathered {
-                    Ok((identity, type_name, report, sampled, found_in)) => {
+                    Ok((identity, type_name, issues, sampled, found_in)) => {
                         context.source = identity.source;
                         context.detail_type = identity.detail_type;
-                        context.type_name = Some(type_name);
+                        context.type_name = type_name;
                         if found_in.is_some() {
                             context.log_group = found_in;
                         }
                         SchemaIssues {
                             schema_name: name,
                             context,
-                            issues: report.issues,
+                            issues,
                             note: (sampled == 0).then(|| {
                                 "Nothing cached for this schema — run the report again to sample it."
                                     .to_string()
@@ -1408,4 +1463,35 @@ pub async fn event_sources(
     }
 
     Ok(sources.into_values().collect())
+}
+
+/// Check one event, as caught by a watch, against the schema registered for
+/// its type. No schema at all is reported as the finding it is.
+#[tauri::command]
+pub async fn validate_event(
+    state: State<'_, AppState>,
+    name: String,
+    event: Value,
+    env_id: Option<String>,
+) -> Result<Vec<events::Issue>> {
+    let identity = EventIdentity::from_schema_name(&name)?;
+    let (env, cfg) = state.env_config(env_id.as_deref()).await?;
+    let schemas = aws_sdk_schemas::Client::new(&cfg);
+    let detail = event.get("detail").cloned();
+    let (content, type_name) = match fetch_schema(&schemas, &env.registry_name, &name).await {
+        Ok(found) => found,
+        Err(Error::NotFound(_)) => {
+            return Ok(vec![events::unregistered_issue(
+                &identity.source,
+                &identity.detail_type,
+                1,
+                detail,
+            )])
+        }
+        Err(e) => return Err(e),
+    };
+    let detail =
+        detail.ok_or_else(|| Error::Invalid("The event has no `detail` to check".into()))?;
+    let report = events::check_events(&content, &type_name, &[detail])?;
+    Ok(report.issues)
 }

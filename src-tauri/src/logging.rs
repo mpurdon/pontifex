@@ -42,11 +42,13 @@ pub mod cat {
     pub const JIRA: &str = "jira";
     /// Watch mode: the passive poller, its cursor, and what it matched.
     pub const WATCH: &str = "watch";
+    /// Origin lookups: git pickaxe and GitHub searches.
+    pub const ORIGIN: &str = "origin";
 
     /// Every category, for the UI's filter list and for validation.
     pub const ALL: &[&str] = &[
-        APP, IPC, UI, AWS, SSO, REGISTRY, SCHEMA, EVENTS, CACHE, BEDROCK, TOPOLOGY, SETTINGS,
-        JIRA, WATCH,
+        APP, IPC, UI, AWS, SSO, REGISTRY, SCHEMA, EVENTS, CACHE, BEDROCK, TOPOLOGY, SETTINGS, JIRA,
+        WATCH, ORIGIN,
     ];
 }
 

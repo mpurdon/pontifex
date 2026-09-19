@@ -124,6 +124,43 @@ pub enum IssueKind {
     NeverSeen,
     /// A rejection none of the above explains — a pattern, a format, a bound.
     Rejected,
+    /// The event type is on the bus and the registry has no schema for it
+    /// at all. Not a disagreement with a schema — the absence of one.
+    Unregistered,
+}
+
+/// The issue an event type with no schema raises. `seen` is how many of its
+/// events were found; `example` is one payload.
+pub fn unregistered_issue(
+    source: &str,
+    detail_type: &str,
+    seen: usize,
+    example: Option<Value>,
+) -> Issue {
+    Issue {
+        key: "unregistered".into(),
+        kind: IssueKind::Unregistered,
+        severity: IssueSeverity::Warning,
+        path: String::new(),
+        summary: format!(
+            "`{source}` publishes `{detail_type}` and the registry has no schema for it"
+        ),
+        action: "Register a schema for this event type — Pontifex can draft one from its \
+                 traffic — so consumers have a contract to build against and validation \
+                 can catch drift."
+            .into(),
+        declared: Some("no schema".into()),
+        observed: Some(format!(
+            "{seen} event{} on the bus",
+            if seen == 1 { "" } else { "s" }
+        )),
+        affected: seen,
+        sampled: seen,
+        rejects: false,
+        example,
+        message: None,
+        fix: None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
@@ -310,7 +347,9 @@ impl Observation {
                 if self.example.is_none() {
                     self.example = Some(example.clone());
                 }
-                self.examples.entry(ty.clone()).or_insert_with(|| example.clone());
+                self.examples
+                    .entry(ty.clone())
+                    .or_insert_with(|| example.clone());
             }
         }
         for value in seen.values {
@@ -426,10 +465,7 @@ fn declare_object(
             DeclaredField {
                 types: declared_types(resolved),
                 required: required.contains(name),
-                enum_values: resolved
-                    .get("enum")
-                    .and_then(Value::as_array)
-                    .cloned(),
+                enum_values: resolved.get("enum").and_then(Value::as_array).cloned(),
             },
         );
 
@@ -558,8 +594,7 @@ pub fn check_events(
                         .filter(|t| !field.types.contains(t))
                         // `integer` satisfies a `number` declaration.
                         .filter(|t| {
-                            !(t.as_str() == "integer"
-                                && field.types.iter().any(|d| d == "number"))
+                            !(t.as_str() == "integer" && field.types.iter().any(|d| d == "number"))
                         })
                         .cloned()
                         .collect();
@@ -658,7 +693,9 @@ pub fn check_events(
     }
 
     // Most-frequent first: the drift worth acting on is the drift that happens.
-    drift.undeclared.sort_by(|a, b| b.seen_in.cmp(&a.seen_in).then(a.path.cmp(&b.path)));
+    drift
+        .undeclared
+        .sort_by(|a, b| b.seen_in.cmp(&a.seen_in).then(a.path.cmp(&b.path)));
     drift
         .type_mismatches
         .sort_by_key(|m| std::cmp::Reverse(m.mismatched_in));
@@ -908,8 +945,10 @@ fn build_issues(
     }
 
     for entry in &drift.enum_drift {
-        let (severity, affected, rejects, message) =
-            from_failure(take("outsideEnum", &entry.path, &mut used), entry.unexpected_in);
+        let (severity, affected, rejects, message) = from_failure(
+            take("outsideEnum", &entry.path, &mut used),
+            entry.unexpected_in,
+        );
         let unexpected = entry
             .unexpected
             .iter()
@@ -1003,7 +1042,11 @@ fn build_issues(
                     field_label(&field.path)
                 )
             } else {
-                format!("Declare {} as {} — nothing validates it today.", field_label(&field.path), types)
+                format!(
+                    "Declare {} as {} — nothing validates it today.",
+                    field_label(&field.path),
+                    types
+                )
             },
             declared: None,
             observed: Some(types),
@@ -1035,7 +1078,14 @@ fn build_issues(
                 "Possibly dead, possibly just rare. Widen the window before removing it."
                     .to_string()
             },
-            declared: Some(if field.required { "required" } else { "optional" }.to_string()),
+            declared: Some(
+                if field.required {
+                    "required"
+                } else {
+                    "optional"
+                }
+                .to_string(),
+            ),
             observed: None,
             affected: 0,
             sampled,
@@ -1356,7 +1406,10 @@ mod tests {
         let report = check_events(&document(), "Sync", &events).unwrap();
         assert_eq!(report.failed, 1);
         assert!(
-            report.failures.iter().any(|f| f.message.contains("clientId")),
+            report
+                .failures
+                .iter()
+                .any(|f| f.message.contains("clientId")),
             "{:?}",
             report.failures
         );
@@ -1409,7 +1462,12 @@ mod tests {
     fn reports_declared_fields_that_never_appear() {
         let events = vec![json!({ "clientId": "a" })];
         let report = check_events(&document(), "Sync", &events).unwrap();
-        let unused: Vec<&str> = report.drift.unused.iter().map(|u| u.path.as_str()).collect();
+        let unused: Vec<&str> = report
+            .drift
+            .unused
+            .iter()
+            .map(|u| u.path.as_str())
+            .collect();
         assert!(unused.contains(&"retired"));
         assert!(unused.contains(&"metadata.trackingId"));
     }
@@ -1465,7 +1523,10 @@ mod tests {
         let report = check_events(&document(), "Sync", &events).unwrap();
         assert_eq!(report.drift.enum_drift.len(), 1);
         assert_eq!(report.drift.enum_drift[0].path, "status");
-        assert_eq!(report.drift.enum_drift[0].unexpected, vec![json!("cancelled")]);
+        assert_eq!(
+            report.drift.enum_drift[0].unexpected,
+            vec![json!("cancelled")]
+        );
     }
 
     #[test]
@@ -1505,7 +1566,11 @@ mod tests {
         assert_eq!(issue.sampled, 2);
         assert_eq!(issue.declared.as_deref(), Some("integer"));
         assert_eq!(issue.observed.as_deref(), Some("string"));
-        assert!(issue.action.contains("Fix the producer"), "{}", issue.action);
+        assert!(
+            issue.action.contains("Fix the producer"),
+            "{}",
+            issue.action
+        );
         // The validator's wording survives, since it is what a producer team
         // will recognise.
         assert!(issue.message.is_some());
@@ -1631,7 +1696,10 @@ mod tests {
 
     #[test]
     fn matches_a_missing_required_field_to_its_rejection() {
-        let events = vec![json!({ "count": 1 }), json!({ "clientId": "a", "count": 2 })];
+        let events = vec![
+            json!({ "count": 1 }),
+            json!({ "clientId": "a", "count": 2 }),
+        ];
         let report = check_events(&document(), "Sync", &events).unwrap();
 
         // The validator reports this against the *object*; the drift report
@@ -1707,7 +1775,11 @@ mod tests {
         let events = vec![json!({ "tags": ["a", "b", "c"] })];
         let report = check_events(&doc, "T", &events).unwrap();
         // Three elements must not become three undeclared paths.
-        assert!(report.drift.undeclared.is_empty(), "{:?}", report.drift.undeclared);
+        assert!(
+            report.drift.undeclared.is_empty(),
+            "{:?}",
+            report.drift.undeclared
+        );
     }
 
     #[test]
@@ -1740,7 +1812,12 @@ mod tests {
         assert_eq!(
             props["newField"],
             declaration_for(
-                report.drift.undeclared.iter().find(|f| f.path == "newField").unwrap()
+                report
+                    .drift
+                    .undeclared
+                    .iter()
+                    .find(|f| f.path == "newField")
+                    .unwrap()
             ),
         );
         // Seen as both null and string, so it is declared with both types —
@@ -1961,9 +2038,15 @@ mod tests {
         let report = check_events(&document(), "Sync", &events).unwrap();
 
         let Some(Repair::WidenType { types }) = offered(&report, "metadata") else {
-            panic!("expected a widen repair for metadata, got {:?}", offered(&report, "metadata"));
+            panic!(
+                "expected a widen repair for metadata, got {:?}",
+                offered(&report, "metadata")
+            );
         };
-        assert!(!types.contains(&"object".to_string()), "kept a dead type: {types:?}");
+        assert!(
+            !types.contains(&"object".to_string()),
+            "kept a dead type: {types:?}"
+        );
         assert!(types.contains(&"string".to_string()));
         assert!(types.contains(&"null".to_string()));
     }
@@ -1983,7 +2066,10 @@ mod tests {
             panic!("expected a widen repair for amount");
         };
         // `number` covers the integer traffic, so it survives; `string` joins it.
-        assert!(types.contains(&"number".to_string()), "dropped number: {types:?}");
+        assert!(
+            types.contains(&"number".to_string()),
+            "dropped number: {types:?}"
+        );
         assert!(types.contains(&"string".to_string()));
     }
 
@@ -2026,7 +2112,11 @@ mod tests {
         let repaired = crate::schema::repair::apply(&document(), "Sync", "note", &fix).unwrap();
         let after = check_events(&repaired, "Sync", &events).unwrap();
 
-        assert_eq!(after.failed, 0, "events still rejected: {:?}", after.failures);
+        assert_eq!(
+            after.failed, 0,
+            "events still rejected: {:?}",
+            after.failures
+        );
         assert!(
             offered(&after, "note").is_none(),
             "the issue survived its own repair"

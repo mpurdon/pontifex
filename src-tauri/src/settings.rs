@@ -230,6 +230,12 @@ pub struct SourceRoute {
     pub assignee_account_id: Option<String>,
 }
 
+/// A routing rule matched against who owns the producer rather than what
+/// it is called: the CODEOWNERS team (`@org/team`) or repository
+/// (`org/repo`) the origin lookup found. Same shape as a source rule; only
+/// what the pattern is held against differs.
+pub type OwnerRoute = SourceRoute;
+
 /// Everything about Jira that is not a secret.
 ///
 /// The client secret and the OAuth tokens are deliberately absent: they live
@@ -260,6 +266,10 @@ pub struct JiraSettings {
     pub labels: Vec<String>,
     #[serde(default)]
     pub routes: Vec<SourceRoute>,
+    /// Consulted when no source rule matches: routes by who the origin
+    /// lookup says publishes the event.
+    #[serde(default)]
+    pub owner_routes: Vec<OwnerRoute>,
     /// Values for fields a project makes mandatory, keyed by project then field id.
     ///
     /// Projects can demand anything — a "Discovery Environment", a team, a
@@ -289,6 +299,7 @@ impl Default for JiraSettings {
             issue_type: default_issue_type(),
             labels: Vec::new(),
             routes: Vec::new(),
+            owner_routes: Vec::new(),
             field_defaults: Default::default(),
         }
     }
@@ -299,6 +310,51 @@ impl JiraSettings {
     pub fn is_configured(&self) -> bool {
         !self.client_id.trim().is_empty()
     }
+}
+
+/// Where the organisation's code lives, for the origin lookup. The token is
+/// in the keychain (or borrowed from the GitHub CLI), never here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubSettings {
+    /// Organisation to search. Unset: read from the bus checkout's remote.
+    #[serde(default)]
+    pub org: Option<String>,
+    /// Path globs the origin lookup never examines: tests, specs, fixtures
+    /// and the like, which name an event type without producing or
+    /// consuming it. Same pattern rules as CODEOWNERS.
+    #[serde(default = "default_origin_ignore")]
+    pub ignore: Vec<String>,
+}
+
+impl Default for GithubSettings {
+    fn default() -> Self {
+        GithubSettings {
+            org: None,
+            ignore: default_origin_ignore(),
+        }
+    }
+}
+
+/// What a fresh install skips. Editable in Settings → Repo.
+pub fn default_origin_ignore() -> Vec<String> {
+    [
+        "*.test.*",
+        "*.spec.*",
+        "*.snap",
+        "*.md",
+        "openapi-spec.*",
+        "**/__tests__/**",
+        "**/tests/**",
+        "**/test/**",
+        "**/__mocks__/**",
+        "**/mocks/**",
+        "**/fixtures/**",
+        "**/docs/**",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -314,6 +370,9 @@ pub struct Settings {
     /// Where producer bugs get filed. See `docs/jira-integration.md`.
     #[serde(default)]
     pub jira: JiraSettings,
+    /// Where producer code lives, for "who publishes this".
+    #[serde(default)]
+    pub github: GithubSettings,
     /// Path to a local checkout of global-event-bus. Used by the topology view
     /// to read `stacks/busConfiguration.ts`, and as the default import/export root.
     pub event_bus_repo_path: Option<String>,
@@ -373,6 +432,7 @@ impl Settings {
             llm: LlmSettings::default(),
             scan: ScanSettings::default(),
             jira: JiraSettings::default(),
+            github: GithubSettings::default(),
             event_bus_repo_path: repo_path.map(|p| p.to_string_lossy().into_owned()),
             pinned_sources: Vec::new(),
             panel_sizes: Default::default(),
@@ -411,6 +471,11 @@ pub fn save(app_config_dir: &Path, settings: &Settings) -> Result<()> {
 /// to a sibling temp file first, then renamed into place. Creates the parent
 /// directory. The one way every on-disk record in the app is written.
 pub fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
+    write_bytes_atomic(path, serde_json::to_string_pretty(value)?.as_bytes())
+}
+
+/// Write a file whole or not at all: a temp file beside it, then a rename.
+pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -419,7 +484,7 @@ pub fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = path.with_extension(format!("json.{}.{seq}.tmp", std::process::id()));
-    std::fs::write(&tmp, serde_json::to_string_pretty(value)?)?;
+    std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
 }

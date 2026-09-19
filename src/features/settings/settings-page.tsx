@@ -40,6 +40,7 @@ import {
   Select,
   Spinner,
   StepSlider,
+  Textarea,
   cn,
 } from '@/components/ui'
 import { useSettings } from '@/app/settings-context'
@@ -224,7 +225,12 @@ export function SettingsPage() {
 
           {tab === 'jira' && <JiraSection draft={draft} onChange={patch} />}
 
-          {tab === 'repo' && <RepoSection draft={draft} onChange={patch} />}
+          {tab === 'repo' && (
+            <>
+              <RepoSection draft={draft} onChange={patch} />
+              <GithubSection draft={draft} onChange={patch} />
+            </>
+          )}
 
           {tab === 'developer' && (
             <Panel title="Developer" bodyClassName="flex flex-col gap-2 p-2">
@@ -1457,6 +1463,131 @@ function EventCacheSection() {
 }
 
 // --- repo -----------------------------------------------------------------
+
+/**
+ * GitHub access for the origin lookup: which organisation to search and a
+ * token to search it with. The token lives in the keychain, and someone
+ * already signed into the GitHub CLI needs no token here at all.
+ */
+function GithubSection({
+  draft,
+  onChange,
+}: {
+  draft: Settings
+  onChange: (changes: Partial<Settings>) => void
+}) {
+  const status = useQuery({
+    queryKey: ['github', 'status'],
+    queryFn: ipc.githubStatus,
+    retry: false,
+  })
+  const [token, setToken] = useState('')
+  const save = useMutation<void, IpcError, string>({
+    mutationFn: ipc.setGithubToken,
+    onSuccess: () => {
+      setToken('')
+      status.refetch()
+    },
+  })
+  const check = useMutation<string, IpcError>({ mutationFn: ipc.githubCheck })
+  const tokenSource = status.data?.tokenSource
+  return (
+    <Panel title="GitHub" bodyClassName="flex flex-col gap-3 p-3">
+      <p className="text-[10px] text-ink-faint">
+        The Origin view on a schema, and on a watch hit, searches the organisation's code for
+        the event type to say who first published it, in which pull request, and who owns that
+        code now.
+      </p>
+      <Field
+        label="Organisation"
+        hint={
+          status.data?.orgFromRemote
+            ? `Left blank, ${status.data.orgFromRemote} is read from the bus checkout's remote.`
+            : 'The GitHub organisation whose repositories publish events.'
+        }
+      >
+        <Input
+          value={draft.github.org ?? ''}
+          onChange={(e) => onChange({ github: { ...draft.github, org: e.target.value || null } })}
+          placeholder={status.data?.orgFromRemote ?? 'team-and-tech'}
+          className="font-mono"
+          spellCheck={false}
+        />
+      </Field>
+      <Field
+        label="Token"
+        hint={
+          tokenSource === 'ghCli'
+            ? 'Borrowing the GitHub CLI sign-in. Store a token here only to override it.'
+            : tokenSource === 'keychain'
+              ? 'A token is stored in the keychain — leave blank to keep it, or save an empty value to clear it.'
+              : 'A personal access token with read access to the organisation, or sign in with `gh auth login` and leave this blank.'
+        }
+      >
+        <div className="flex gap-2">
+          <Input
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder={tokenSource === 'keychain' ? '••••••••' : 'ghp_…'}
+            className="font-mono"
+            spellCheck={false}
+          />
+          <Button
+            variant="secondary"
+            onClick={() => save.mutate(token)}
+            loading={save.isPending}
+            disabled={!token && tokenSource !== 'keychain'}
+          >
+            {token ? 'Save token' : 'Clear'}
+          </Button>
+          <Button variant="ghost" onClick={() => check.mutate()} loading={check.isPending}>
+            Check
+          </Button>
+        </div>
+      </Field>
+      {check.data && <Note tone="ok">Signed in as {check.data}.</Note>}
+      {check.isError && <ErrorBox error={check.error} />}
+      {save.isError && <ErrorBox error={save.error} />}
+
+      <Field
+        label="Never examine"
+        hint="One path glob per line, with CODEOWNERS rules: * within a name, ** across directories, a leading / anchors to the repo root. Matching files are skipped before any history is read, so everything left is examined in the first pass."
+      >
+        <Textarea
+          rows={6}
+          value={draft.github.ignore.join('\n')}
+          onChange={(e) =>
+            onChange({
+              github: {
+                ...draft.github,
+                ignore: e.target.value
+                  .split('\n')
+                  .map((l) => l.trim())
+                  .filter((l) => l && !l.startsWith('#')),
+              },
+            })
+          }
+          placeholder={(status.data?.defaultIgnore ?? []).join('\n')}
+          className="font-mono"
+          spellCheck={false}
+        />
+      </Field>
+      <div>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={!status.data}
+          onClick={() =>
+            onChange({ github: { ...draft.github, ignore: [...(status.data?.defaultIgnore ?? [])] } })
+          }
+        >
+          Reset to defaults
+        </Button>
+      </div>
+    </Panel>
+  )
+}
 
 function RepoSection({
   draft,

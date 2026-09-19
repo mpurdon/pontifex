@@ -3,20 +3,27 @@
 #[macro_use]
 pub mod logging;
 
+pub mod analysis_cache;
 pub mod aws;
 mod commands;
 pub mod error;
 pub mod events_cache;
 pub mod jira;
+pub mod keychain;
+pub mod origin;
 mod settings;
 mod state;
 pub mod watch;
+
+// The origin lookup's default ignore list, for the live test that runs it.
+pub use settings::default_origin_ignore;
 
 use logging::cat;
 
 // Public so the integration tests in `tests/` can exercise the schema
 // transforms directly against the real repo fixtures.
 pub mod schema;
+pub mod ttl_cache;
 
 use state::AppState;
 use tauri::Manager;
@@ -81,7 +88,10 @@ fn guess_default_profile(profiles: &[aws::profiles::AwsProfile]) -> Option<Strin
 /// topology view and import/export have a sensible default.
 fn guess_repo_path() -> Option<std::path::PathBuf> {
     let home = dirs::home_dir()?;
-    let candidate = home.join("Projects").join("trajector").join("global-event-bus");
+    let candidate = home
+        .join("Projects")
+        .join("trajector")
+        .join("global-event-bus");
     candidate
         .join("stacks")
         .join("busConfiguration.ts")
@@ -114,7 +124,10 @@ pub fn run() {
             };
 
             let level = logging::level_from_str(
-                loaded.as_ref().map(|s| s.log_level.as_str()).unwrap_or("info"),
+                loaded
+                    .as_ref()
+                    .map(|s| s.log_level.as_str())
+                    .unwrap_or("info"),
             );
 
             // Always log to a file, not only in debug: the Developer tab
@@ -152,11 +165,9 @@ pub fn run() {
                         ))
                     })
                     .targets([
-                        tauri_plugin_log::Target::new(
-                            tauri_plugin_log::TargetKind::LogDir {
-                                file_name: Some("pontifex".into()),
-                            },
-                        ),
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                            file_name: Some("pontifex".into()),
+                        }),
                         tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
                     ])
                     .max_file_size(5_000_000)
@@ -282,6 +293,7 @@ pub fn run() {
             commands::bedrock::list_bedrock_models,
             // reality check
             commands::reality::check_against_events,
+            commands::reality::cached_analysis,
             commands::reality::apply_field_suggestions,
             commands::reality::add_observed_field,
             commands::reality::apply_issue_repair,
@@ -292,6 +304,7 @@ pub fn run() {
             commands::reality::clear_event_cache,
             commands::reality::draft_from_events,
             commands::reality::issues_for_schemas,
+            commands::reality::validate_event,
             commands::reality::event_sources,
             // jira
             commands::jira::jira_status,
@@ -333,6 +346,11 @@ pub fn run() {
             commands::watch::ask_notification_permission_again,
             commands::watch::poll_now,
             commands::watch::probe_watch,
+            // origin
+            commands::origin::event_origin,
+            commands::origin::github_status,
+            commands::origin::set_github_token,
+            commands::origin::github_check,
         ])
         // Closing the window while an environment is being watched hides it
         // instead of quitting: a watch that dies with the window is not one

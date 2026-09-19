@@ -57,7 +57,8 @@ impl SsoRoleProvider {
         let session = profiles::get_sso_session(&self.target.session)
             .map_err(|e| CredentialsError::invalid_configuration(e.to_string()))?;
 
-        let access_token = sso::require_token(&self.target.session)
+        let access_token = sso::fresh_token(&self.target.session)
+            .await
             .map_err(|e| CredentialsError::invalid_configuration(e.to_string()))?;
 
         let cfg = aws_config::defaults(BehaviorVersion::latest())
@@ -85,9 +86,9 @@ impl SsoRoleProvider {
                 ))
             })?;
 
-        let role = out
-            .role_credentials()
-            .ok_or_else(|| CredentialsError::invalid_configuration("SSO returned no credentials"))?;
+        let role = out.role_credentials().ok_or_else(|| {
+            CredentialsError::invalid_configuration("SSO returned no credentials")
+        })?;
 
         let (Some(key), Some(secret)) = (role.access_key_id(), role.secret_access_key()) else {
             return Err(CredentialsError::invalid_configuration(
@@ -97,10 +98,7 @@ impl SsoRoleProvider {
 
         // `expiration` is epoch milliseconds.
         let expires_at = if role.expiration() > 0 {
-            Some(
-                std::time::UNIX_EPOCH
-                    + std::time::Duration::from_millis(role.expiration() as u64),
-            )
+            Some(std::time::UNIX_EPOCH + std::time::Duration::from_millis(role.expiration() as u64))
         } else {
             None
         };
@@ -158,7 +156,7 @@ async fn sso_client(session_name: &str) -> crate::error::Result<aws_sdk_sso::Cli
 
 /// Every account the session's current token grants access to.
 pub async fn list_accounts(session_name: &str) -> crate::error::Result<Vec<SsoAccount>> {
-    let access_token = sso::require_token(session_name)?;
+    let access_token = sso::fresh_token(session_name).await?;
     let client = sso_client(session_name).await?;
 
     let mut out = Vec::new();
@@ -198,7 +196,7 @@ pub async fn list_account_roles(
     session_name: &str,
     account_id: &str,
 ) -> crate::error::Result<Vec<String>> {
-    let access_token = sso::require_token(session_name)?;
+    let access_token = sso::fresh_token(session_name).await?;
     let client = sso_client(session_name).await?;
 
     let mut out = Vec::new();
@@ -241,7 +239,11 @@ mod tests {
 
     #[test]
     fn ignores_unrelated_accounts() {
-        for name in ["Billing Production", "Data Platform Testing", "platform-dev"] {
+        for name in [
+            "Billing Production",
+            "Data Platform Testing",
+            "platform-dev",
+        ] {
             assert!(!looks_like_event_bus_account(Some(name)), "{name}");
         }
         assert!(!looks_like_event_bus_account(None));

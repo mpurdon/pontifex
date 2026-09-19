@@ -35,6 +35,57 @@ pub struct TicketContext {
     /// The type the payloads were validated against.
     #[serde(default)]
     pub type_name: Option<String>,
+    /// Who publishes it, when the origin lookup has run for this type.
+    #[serde(default)]
+    pub origin: Option<TicketOrigin>,
+}
+
+/// The publisher, as the origin lookup found it, for the ticket body and
+/// for routing by owner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TicketOrigin {
+    pub repo: String,
+    pub path: String,
+    pub url: String,
+    #[serde(default)]
+    pub owners: Vec<String>,
+    #[serde(default)]
+    pub introduced_by: Option<String>,
+    #[serde(default)]
+    pub pull_url: Option<String>,
+    /// True when the file puts the event on the bus, as opposed to merely
+    /// naming it — which is all the lookup could find for some types.
+    #[serde(default)]
+    pub publisher: bool,
+}
+
+impl TicketOrigin {
+    /// The most telling file the lookup found: a publisher, else the first
+    /// non-incidental match, else nothing worth putting in a ticket.
+    pub fn from_origin(origin: &crate::origin::EventOrigin) -> Option<Self> {
+        use crate::origin::Role;
+        let best = origin
+            .producers
+            .iter()
+            .filter(|p| !p.incidental)
+            .max_by_key(|p| p.role)?;
+        let introduced = best.introduced.as_ref();
+        Some(TicketOrigin {
+            repo: best.repo.clone(),
+            path: best.path.clone(),
+            url: best.url.clone(),
+            owners: best.owners.clone(),
+            introduced_by: introduced.map(|a| {
+                a.pull_author
+                    .clone()
+                    .or_else(|| a.login.clone())
+                    .unwrap_or_else(|| a.author.clone())
+            }),
+            pull_url: introduced.and_then(|a| a.pull_url.clone()),
+            publisher: best.role == Role::Publisher,
+        })
+    }
 }
 
 /// A ticket, fully rendered, before anyone has agreed to create it.
@@ -86,6 +137,7 @@ fn kind_phrase(kind: IssueKind) -> &'static str {
         IssueKind::Undeclared => "sends a field the schema does not describe",
         IssueKind::NeverSeen => "never sends a field the schema declares",
         IssueKind::Rejected => "sends events the schema rejects",
+        IssueKind::Unregistered => "publishes an event type with no registered schema",
     }
 }
 
@@ -152,15 +204,22 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
     } else {
         "* Not currently rejected — the schema is out of date, not blocking.\n"
     });
-    out.push_str(&format!(
-        "* Schema: {{{{{}}}}}{}\n",
-        context.schema_name,
-        context
-            .type_name
-            .as_ref()
-            .map(|t| format!(", validated against {{{{{t}}}}}"))
-            .unwrap_or_default(),
-    ));
+    if issue.kind == IssueKind::Unregistered {
+        out.push_str(&format!(
+            "* Schema: none registered — it would be named {{{{{}}}}}\n",
+            context.schema_name
+        ));
+    } else {
+        out.push_str(&format!(
+            "* Schema: {{{{{}}}}}{}\n",
+            context.schema_name,
+            context
+                .type_name
+                .as_ref()
+                .map(|t| format!(", validated against {{{{{t}}}}}"))
+                .unwrap_or_default(),
+        ));
+    }
     if let Some(registry) = &context.registry {
         out.push_str(&format!("* Registry: {{{{{registry}}}}}\n"));
     }
@@ -169,9 +228,34 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
     }
     out.push('\n');
 
+    if let Some(origin) = &context.origin {
+        out.push_str(if origin.publisher {
+            "h3. Publisher\n"
+        } else {
+            "h3. Where it appears\n"
+        });
+        out.push_str(&format!(
+            "* [{}/{}|{}]\n",
+            origin.repo, origin.path, origin.url
+        ));
+        if !origin.owners.is_empty() {
+            out.push_str(&format!("* Owned by {}\n", origin.owners.join(", ")));
+        }
+        if let Some(by) = &origin.introduced_by {
+            match &origin.pull_url {
+                Some(url) => out.push_str(&format!("* First published by {by} in [{url}]\n")),
+                None => out.push_str(&format!("* First published by {by}\n")),
+            }
+        }
+        out.push('\n');
+    }
+
     if let Some(example) = &issue.example {
         out.push_str("h3. Example value\n");
-        out.push_str(&format!("{{code}}\n{}\n{{code}}\n\n", render_example(example)));
+        out.push_str(&format!(
+            "{{code}}\n{}\n{{code}}\n\n",
+            render_example(example)
+        ));
     }
 
     if let Some(message) = &issue.message {
@@ -189,20 +273,26 @@ pub fn render_summary(issue: &Issue, context: &TicketContext) -> String {
 }
 
 /// Build the ticket, or explain why it cannot be routed.
-pub fn draft(issue: &Issue, context: &TicketContext, settings: &JiraSettings) -> Result<TicketDraft> {
+pub fn draft(
+    issue: &Issue,
+    context: &TicketContext,
+    settings: &JiraSettings,
+) -> Result<TicketDraft> {
     let Routed {
         project_key,
         issue_type,
         labels: route_labels,
         assignee_account_id,
         reason,
-    } = routing::route_for(settings, &context.source).ok_or_else(|| {
-        Error::Invalid(format!(
+    } = routing::route_for(settings, &context.source, context.origin.as_ref()).ok_or_else(
+        || {
+            Error::Invalid(format!(
             "No Jira project is mapped to the source '{}'. Add a rule — or a default project — \
              in Settings → Jira.",
             context.source
         ))
-    })?;
+        },
+    )?;
 
     let fingerprint = fingerprint(&context.environment, &context.schema_name, &issue.key);
 
@@ -299,6 +389,7 @@ mod tests {
             log_group: Some("/aws/events/prd-global-events".into()),
             minutes: Some(1440),
             type_name: Some("LeadUnreached".into()),
+            origin: None,
         }
     }
 
@@ -418,7 +509,10 @@ mod tests {
         let fields = to_fields(&draft);
         assert_eq!(fields["fields"]["project"]["key"], "IPP");
         assert_eq!(fields["fields"]["issuetype"]["name"], "Bug");
-        assert!(fields["fields"]["summary"].as_str().unwrap().starts_with("[orders-fulfilment]"));
+        assert!(fields["fields"]["summary"]
+            .as_str()
+            .unwrap()
+            .starts_with("[orders-fulfilment]"));
         assert!(fields["fields"]["assignee"].is_null());
     }
 }

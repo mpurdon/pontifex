@@ -156,6 +156,101 @@ const ROUTE_GRID = 'grid grid-cols-[1fr_190px_150px_32px] gap-2'
  * act by whoever has an Atlassian admin's ear, and the routing table is the
  * part that gets edited as teams and services move around.
  */
+const blankRoute = (): SourceRoute => ({
+  id: crypto.randomUUID(),
+  pattern: '',
+  projectKey: '',
+  issueType: null,
+  labels: [],
+  assigneeAccountId: null,
+})
+
+/**
+ * The rows of one routing table: a pattern, a project, an issue type.
+ *
+ * Source rules and owner rules have the same shape and differ only in what
+ * the pattern is held against, so they share the editor and say so in the
+ * header.
+ */
+function RouteRows({
+  routes,
+  emptyText,
+  patternHeader,
+  patternPlaceholder,
+  patternListId,
+  projects,
+  issueTypesByProject,
+  defaultIssueType,
+  onChange,
+}: {
+  routes: SourceRoute[]
+  emptyText: string
+  patternHeader: string
+  patternPlaceholder: string
+  patternListId?: string
+  projects: JiraProject[] | undefined
+  issueTypesByProject: Map<string, string[]>
+  defaultIssueType: string
+  onChange: (routes: SourceRoute[]) => void
+}) {
+  const patch = (id: string, changes: Partial<SourceRoute>) =>
+    onChange(routes.map((route) => (route.id === id ? { ...route, ...changes } : route)))
+
+  if (routes.length === 0) {
+    return <p className="px-1 py-2 text-[11px] text-ink-faint">{emptyText}</p>
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      {/* Labels once, above the columns. Repeating a labelled Field per row
+          let a hint under one control push its neighbours out of line, so no
+          two rows sat at the same height. */}
+      <div className={cn(ROUTE_GRID, 'px-1 text-[10px] text-ink-faint')}>
+        <span>{patternHeader}</span>
+        <span>Project</span>
+        <span>Issue type</span>
+        <span />
+      </div>
+
+      {routes.map((route) => (
+        <div key={route.id} className={cn(ROUTE_GRID, 'items-center')}>
+          <Input
+            value={route.pattern}
+            onChange={(e) => patch(route.id, { pattern: e.target.value })}
+            placeholder={patternPlaceholder}
+            className="font-mono"
+            spellCheck={false}
+            list={patternListId}
+          />
+
+          <ProjectPicker
+            value={route.projectKey}
+            projects={projects}
+            emptyLabel="choose…"
+            onChange={(key) => patch(route.id, { projectKey: key })}
+          />
+
+          <IssueTypePicker
+            value={route.issueType ?? ''}
+            types={issueTypesByProject.get(route.projectKey)}
+            fallbackLabel={`${defaultIssueType} (default)`}
+            onChange={(type) => patch(route.id, { issueType: type || null })}
+          />
+
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-danger"
+            onClick={() => onChange(routes.filter((r) => r.id !== route.id))}
+            title="Remove this rule"
+          >
+            <Trash2 className="size-3" />
+          </Button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function JiraSection({
   draft,
   onChange,
@@ -310,11 +405,12 @@ export function JiraSection({
         ...new Set(
           [
             ...draft.jira.routes.map((route) => route.projectKey),
+            ...draft.jira.ownerRoutes.map((route) => route.projectKey),
             draft.jira.defaultProject ?? '',
           ].filter(Boolean),
         ),
       ].sort(),
-    [draft.jira.routes, draft.jira.defaultProject],
+    [draft.jira.routes, draft.jira.ownerRoutes, draft.jira.defaultProject],
   )
 
   const issueTypeQueries = useQueries({
@@ -336,12 +432,6 @@ export function JiraSection({
     return map
   }, [projectKeys, issueTypeQueries])
 
-  const patchRoute = (id: string, changes: Partial<SourceRoute>) =>
-    patchJira({
-      routes: draft.jira.routes.map((route) =>
-        route.id === id ? { ...route, ...changes } : route,
-      ),
-    })
 
   const defaultTypes = draft.jira.defaultProject
     ? issueTypesByProject.get(draft.jira.defaultProject)
@@ -548,17 +638,7 @@ export function JiraSection({
             size="sm"
             onClick={() =>
               patchJira({
-                routes: [
-                  ...draft.jira.routes,
-                  {
-                    id: crypto.randomUUID(),
-                    pattern: '',
-                    projectKey: '',
-                    issueType: null,
-                    labels: [],
-                    assigneeAccountId: null,
-                  },
-                ],
+                routes: [...draft.jira.routes, blankRoute()],
               })
             }
           >
@@ -578,70 +658,19 @@ export function JiraSection({
           is registered under.
         </p>
 
-        {draft.jira.routes.length === 0 ? (
-          <p className="px-1 py-2 text-[11px] text-ink-faint">
-            No rules yet — everything goes to the default project below.
-          </p>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {/* Labels once, above the columns. Repeating a labelled Field per
-                row let a hint under one control push its neighbours out of
-                line, so no two rows sat at the same height. */}
-            <div className={cn(ROUTE_GRID, 'px-1 text-[10px] text-ink-faint')}>
-              <span>Source pattern</span>
-              <span>Project</span>
-              <span>Issue type</span>
-              <span />
-            </div>
-
-            {draft.jira.routes.map((route) => {
-              const types = issueTypesByProject.get(route.projectKey)
-              return (
-                <div key={route.id} className={cn(ROUTE_GRID, 'items-center')}>
-                  {/* A datalist, not a select: the list is a shortcut, and a
-                      rule may legitimately name a source that has not
-                      published anything yet. */}
-                  <Input
-                    value={route.pattern}
-                    onChange={(e) => patchRoute(route.id, { pattern: e.target.value })}
-                    placeholder="billing-*"
-                    className="font-mono"
-                    spellCheck={false}
-                    list="pontifex-source-patterns"
-                  />
-
-                  <ProjectPicker
-                    value={route.projectKey}
-                    projects={projects.data}
-                    emptyLabel="choose…"
-                    onChange={(key) => patchRoute(route.id, { projectKey: key })}
-                  />
-
-                  <IssueTypePicker
-                    value={route.issueType ?? ''}
-                    types={types}
-                    fallbackLabel={`${draft.jira.issueType} (default)`}
-                    onChange={(type) => patchRoute(route.id, { issueType: type || null })}
-                  />
-
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-danger"
-                    onClick={() =>
-                      patchJira({
-                        routes: draft.jira.routes.filter((r) => r.id !== route.id),
-                      })
-                    }
-                    title="Remove this rule"
-                  >
-                    <Trash2 className="size-3" />
-                  </Button>
-                </div>
-              )
-            })}
-          </div>
-        )}
+        <RouteRows
+          routes={draft.jira.routes}
+          emptyText="No rules yet — everything goes to the default project below."
+          patternHeader="Source pattern"
+          patternPlaceholder="billing-*"
+          // A datalist, not a select: the list is a shortcut, and a rule may
+          // legitimately name a source that has not published anything yet.
+          patternListId="pontifex-source-patterns"
+          projects={projects.data}
+          issueTypesByProject={issueTypesByProject}
+          defaultIssueType={draft.jira.issueType}
+          onChange={(routes) => patchJira({ routes })}
+        />
 
         <datalist id="pontifex-source-patterns">
           {patternOptions.map(({ pattern, seenAs }) => (
@@ -701,6 +730,44 @@ export function JiraSection({
           <Bug className="size-2.5" />
           Every ticket is labelled so the same problem is never filed twice.
         </p>
+      </Panel>
+
+      <Panel
+        title="Which team owns the code, when no source rule says"
+        bodyClassName="flex flex-col gap-2 p-2"
+        actions={
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              patchJira({
+                ownerRoutes: [...draft.jira.ownerRoutes, blankRoute()],
+              })
+            }
+          >
+            <Plus className="size-3" />
+            Rule
+          </Button>
+        }
+      >
+        <p className="px-1 text-[10px] text-ink-faint">
+          Matched against what the origin lookup found for the event type: the CODEOWNERS
+          team, like <span className="font-mono">@acme/payments</span>, or the repository,
+          like <span className="font-mono">acme/billing-*</span>. Consulted only when no
+          source rule matches, and only for types whose origin has been looked up — the
+          Origin tab on a schema, or a watch hit, does that.
+        </p>
+
+        <RouteRows
+          routes={draft.jira.ownerRoutes}
+          emptyText="No owner rules — a source no rule matches goes to the default project."
+          patternHeader="Team or repository pattern"
+          patternPlaceholder="@acme/payments"
+          projects={projects.data}
+          issueTypesByProject={issueTypesByProject}
+          defaultIssueType={draft.jira.issueType}
+          onChange={(ownerRoutes) => patchJira({ ownerRoutes })}
+        />
       </Panel>
     </>
   )
