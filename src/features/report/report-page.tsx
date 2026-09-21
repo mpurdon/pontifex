@@ -4,9 +4,11 @@ import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Bug,
+  Check,
   CheckCircle2,
   ClipboardList,
   HelpCircle,
+  RotateCcw,
   Wand2,
   X,
 } from 'lucide-react'
@@ -60,6 +62,24 @@ interface DisplayRow extends Omit<ReportRow, 'status'> {
   status: FilterStatus
   /** True when no schema exists — the row opens the draft flow, not the editor. */
   missing: boolean
+  /** Set when the row has been dealt with since the report was generated. */
+  addressed: Addressed | null
+}
+
+/**
+ * Why a row counts as dealt with without re-running the report.
+ *
+ * `saved`: the schema has been written since the version this row graded.
+ * `registered`: a type that had no schema now has one. `marked`: you said so.
+ * The first two are read off the live registry list, so fixing a schema in the
+ * editor dims its row here the moment the save lands.
+ */
+type Addressed = 'saved' | 'registered' | 'marked'
+
+const ADDRESSED_LABEL: Record<Addressed, string> = {
+  saved: 'saved since this report',
+  registered: 'schema added since this report',
+  marked: 'marked done',
 }
 
 /** Selected-chip fill per tone, so an active filter reads as pressed. */
@@ -89,6 +109,10 @@ export function ReportPage() {
     setHealthFilter: setFilter,
     healthStatuses: active,
     setHealthStatuses: setActive,
+    healthDone,
+    toggleHealthDone,
+    healthHideDone: hideDone,
+    setHealthHideDone: setHideDone,
   } = useWorkbench()
   const navigate = useNavigate()
   const credentials = useLoginForEnvironment(activeEnvironment)
@@ -143,6 +167,25 @@ export function ReportPage() {
       queryClient.setQueryData(['registryReport', envId], next),
   })
 
+  /**
+   * The registry as it is now, held against the report as it was.
+   *
+   * A schema whose listed timestamp differs from the one it was graded at has
+   * been saved since; a missing type that now appears has been drafted. Either
+   * way that row is dealt with, and the screen can say so without a re-run.
+   * Same key as the Schemas screen's list, so a save there refetches this.
+   */
+  const registry = useQuery({
+    queryKey: ['schemas', envId, 'list'],
+    queryFn: () => ipc.listSchemas(envId),
+    enabled: !!envId && !!report,
+    retry: false,
+  })
+  const registered = useMemo(
+    () => new Map((registry.data ?? []).map((s) => [s.name, s])),
+    [registry.data],
+  )
+
   // Age of the report relative to the window it claims to cover.
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -190,29 +233,63 @@ export function ReportPage() {
   const rows: DisplayRow[] = useMemo(() => {
     if (!report) return []
 
-    const graded: DisplayRow[] = report.rows.map((row) => ({ ...row, missing: false }))
+    // Marks belong to one report; a re-run starts clean.
+    const marked = healthDone?.reportAt === report.generatedAt ? healthDone.names : null
+    const addressedFor = (row: ReportRow, missing: boolean): Addressed | null => {
+      if (marked?.has(row.name)) return 'marked'
+      const live = registered.get(row.name)
+      if (!live) return null
+      if (missing) return 'registered'
+      if (row.lastModified && live.lastModified && live.lastModified !== row.lastModified) {
+        return 'saved'
+      }
+      return null
+    }
 
-    const undocumented: DisplayRow[] = report.unregistered.map((entry) => ({
-      name: `${entry.source}@${entry.detailType}`,
-      source: entry.source,
-      detailType: entry.detailType,
-      // Nothing was graded, because there is nothing to grade against.
-      sampled: 0,
-      observed: entry.count,
-      passed: 0,
-      failed: 0,
-      undeclared: 0,
-      typeMismatches: 0,
-      enumDrift: 0,
-      missingRequired: 0,
-      status: 'missing',
-      headline: 'Published but undocumented — open to draft a schema from its own traffic',
-      missing: true,
+    const graded: DisplayRow[] = report.rows.map((row) => ({
+      ...row,
+      missing: false,
+      addressed: addressedFor(row, false),
     }))
+
+    const undocumented: DisplayRow[] = report.unregistered.map((entry) => {
+      const row: ReportRow = {
+        name: `${entry.source}@${entry.detailType}`,
+        source: entry.source,
+        detailType: entry.detailType,
+        // Nothing was graded, because there is nothing to grade against.
+        sampled: 0,
+        observed: entry.count,
+        passed: 0,
+        failed: 0,
+        undeclared: 0,
+        typeMismatches: 0,
+        enumDrift: 0,
+        missingRequired: 0,
+        status: 'noTraffic',
+        headline: 'Published but undocumented — open to draft a schema from its own traffic',
+        version: null,
+        lastModified: null,
+      }
+      return { ...row, status: 'missing', missing: true, addressed: addressedFor(row, true) }
+    })
 
     // Missing first; the backend already ordered the rest worst-first.
     return [...undocumented, ...graded]
-  }, [report])
+  }, [report, registered, healthDone])
+
+  /** Rows dealt with since the report, per status, for the bar and the chip. */
+  const doneCounts = useMemo(() => {
+    const out = Object.fromEntries(
+      STATUS_ORDER.map((s) => [s, 0]),
+    ) as Record<FilterStatus, number>
+    for (const row of rows) if (row.addressed) out[row.status] += 1
+    return out
+  }, [rows])
+  const doneTotal = useMemo(
+    () => STATUS_ORDER.reduce((sum, s) => sum + doneCounts[s], 0),
+    [doneCounts],
+  )
 
   /**
    * Schemas picked for bulk filing.
@@ -226,11 +303,20 @@ export function ReportPage() {
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase()
     return rows.filter((row) => {
+      if (hideDone && row.addressed) return false
       if (!showAll && !active.has(row.status)) return false
       if (!needle) return true
       return row.name.toLowerCase().includes(needle)
     })
-  }, [rows, filter, active, showAll])
+  }, [rows, filter, active, showAll, hideDone])
+
+  const reportAt = report?.generatedAt
+  const toggleDone = useCallback(
+    (name: string) => {
+      if (reportAt !== undefined) toggleHealthDone(reportAt, name)
+    },
+    [reportAt, toggleHealthDone],
+  )
 
   const toggleSelected = useCallback((name: string, next: boolean) => {
     setSelected((prev) => {
@@ -266,9 +352,9 @@ export function ReportPage() {
     [rows],
   )
 
-  /** Rows with something a producer team could act on. */
+  /** Rows with something a producer team could act on — and not dealt with. */
   const fileable = useMemo(
-    () => visible.filter((row) => FILEABLE.has(row.status)),
+    () => visible.filter((row) => FILEABLE.has(row.status) && !row.addressed),
     [visible],
   )
 
@@ -343,6 +429,8 @@ export function ReportPage() {
               {formatWindow(report.minutes)}, graded against {report.rows.length} schemas in{' '}
               <span className="font-mono">{report.registry}</span>. Generated{' '}
               {ageMs < 60_000 ? 'just now' : `${formatAge(ageMs)} ago`}.
+              {doneTotal > 0 &&
+                ` ${doneTotal} row${doneTotal === 1 ? '' : 's'} dealt with since.`}
             </p>
 
             {mismatched.length > 0 && (
@@ -397,6 +485,7 @@ export function ReportPage() {
             {/* The health bar is always here; only the detail charts fold. */}
             <StatusBar
               counts={counts}
+              done={doneCounts}
               total={total}
               active={active}
               onToggle={toggle}
@@ -457,6 +546,29 @@ export function ReportPage() {
                   className="rounded px-1.5 py-0.5 text-[10px] text-ink-faint hover:bg-surface-2 hover:text-ink-muted"
                 >
                   clear
+                </button>
+              )}
+              {/* Rows dealt with since the report are dimmed by default so you
+                  can still see what was found; this hides them outright. */}
+              {doneTotal > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setHideDone(!hideDone)}
+                  title={
+                    hideDone
+                      ? 'Rows saved or marked done since this report are hidden. Click to show them dimmed.'
+                      : 'Rows saved or marked done since this report are dimmed. Click to hide them.'
+                  }
+                  className={cn(
+                    'ml-2 flex items-center gap-1.5 rounded border px-2 py-0.5 text-[10px] font-medium transition-colors',
+                    hideDone
+                      ? 'border-ok/50 bg-ok/15 text-ok'
+                      : 'border-edge text-ink-faint hover:bg-surface-2 hover:text-ink-muted',
+                  )}
+                >
+                  <Check className="size-2.5" />
+                  {hideDone ? 'hiding' : 'done'}
+                  <span className="font-mono tabular-nums">{doneTotal}</span>
                 </button>
               )}
               <span className="ml-auto text-[10px] text-ink-faint">
@@ -528,6 +640,7 @@ export function ReportPage() {
                       selected={selected.has(row.name)}
                       onSelect={toggleSelected}
                       onOpen={openRow}
+                      onToggleDone={toggleDone}
                     />
                   ))}
                 </tbody>
@@ -561,12 +674,14 @@ const Row = memo(function Row({
   selectable,
   selected,
   onSelect,
+  onToggleDone,
 }: {
   row: DisplayRow
   onOpen: (row: DisplayRow) => void
   selectable: boolean
   selected: boolean
   onSelect: (name: string, next: boolean) => void
+  onToggleDone: (name: string) => void
 }) {
   const status = STATUS[row.status]
   const Icon = status.icon
@@ -576,7 +691,12 @@ const Row = memo(function Row({
   return (
     <tr
       onClick={() => onOpen(row)}
-      className="group h-6 cursor-pointer border-b border-edge/40 hover:bg-surface-2"
+      className={cn(
+        'group h-6 cursor-pointer border-b border-edge/40 hover:bg-surface-2',
+        // Dealt with: still legible, so you can see what the report found,
+        // but visibly out of the way of what is left.
+        row.addressed && 'opacity-40 hover:opacity-80',
+      )}
       title={
         row.missing
           ? `Draft a schema for ${row.name} from its own traffic`
@@ -585,7 +705,7 @@ const Row = memo(function Row({
     >
       {/* Stops the click reaching the row, which navigates away. */}
       <td className="px-2" onClick={(e) => e.stopPropagation()}>
-        {selectable && (
+        {selectable && !row.addressed && (
           <Checkbox
             checked={selected}
             onChange={(e) => onSelect(row.name, e.target.checked)}
@@ -667,15 +787,60 @@ const Row = memo(function Row({
 
       <td className="w-full max-w-0 px-2 text-ink-faint">
         <span className="flex items-center gap-1.5">
+          {row.addressed && (
+            <span
+              className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded bg-ok/15 px-1 text-[10px] text-ok"
+              title={
+                row.addressed === 'saved' && row.version
+                  ? `Graded at version ${row.version}; the registry now holds a newer one`
+                  : ADDRESSED_LABEL[row.addressed]
+              }
+            >
+              <Check className="size-2.5" />
+              {ADDRESSED_LABEL[row.addressed]}
+            </span>
+          )}
           <span className="min-w-0 truncate" title={row.headline ?? ''}>
             {row.headline ?? ''}
           </span>
-          {row.missing && (
-            <span className="ml-auto flex shrink-0 items-center gap-0.5 whitespace-nowrap text-[10px] text-accent opacity-0 group-hover:opacity-100">
-              <Wand2 className="size-2.5" />
-              draft schema
-            </span>
-          )}
+          <span className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap text-[10px] opacity-0 group-hover:opacity-100">
+            {row.missing && !row.addressed && (
+              <span className="flex items-center gap-0.5 text-accent">
+                <Wand2 className="size-2.5" />
+                draft schema
+              </span>
+            )}
+            {/* Hand-marking is for the rows the registry cannot vouch for:
+                a finding you have decided not to act on, or fixed some other
+                way. A row the registry already shows as saved needs no mark. */}
+            {selectable && row.addressed !== 'saved' && row.addressed !== 'registered' && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onToggleDone(row.name)
+                }}
+                title={
+                  row.addressed === 'marked'
+                    ? 'Put this row back among the open findings'
+                    : 'Mark this row dealt with until the next report'
+                }
+                className="flex items-center gap-0.5 rounded px-1 text-ink-faint hover:bg-surface-3 hover:text-ink"
+              >
+                {row.addressed === 'marked' ? (
+                  <>
+                    <RotateCcw className="size-2.5" />
+                    undo
+                  </>
+                ) : (
+                  <>
+                    <Check className="size-2.5" />
+                    mark done
+                  </>
+                )}
+              </button>
+            )}
+          </span>
         </span>
       </td>
     </tr>

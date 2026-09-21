@@ -59,6 +59,7 @@ function Value({ children }: { children: ReactNode }) {
  */
 export function StatusBar({
   counts,
+  done,
   total,
   active,
   onToggle,
@@ -66,6 +67,8 @@ export function StatusBar({
   onToggleCharts,
 }: {
   counts: Record<FilterStatus, number>
+  /** Of each count, how many have been dealt with since the report. */
+  done: Record<FilterStatus, number>
   total: number
   active: Set<FilterStatus>
   onToggle: (status: FilterStatus) => void
@@ -104,6 +107,7 @@ export function StatusBar({
       <div className="flex h-7 w-full overflow-hidden rounded border border-edge/60">
         {present.map((status) => {
           const share = (counts[status] / total) * 100
+          const doneShare = (done[status] / counts[status]) * 100
           const isActive = active.has(status)
           return (
             <button
@@ -111,19 +115,37 @@ export function StatusBar({
               type="button"
               onClick={() => onToggle(status)}
               style={{ width: `${share}%` }}
-              title={`${counts[status]} ${STATUS[status].label} — ${share.toFixed(1)}%. ${STATUS[status].hint}`}
+              title={`${counts[status]} ${STATUS[status].label} — ${share.toFixed(1)}%${
+                done[status] > 0 ? `, ${done[status]} dealt with since the report` : ''
+              }. ${STATUS[status].hint}`}
               className={cn(
-                'flex h-full min-w-[2px] items-center justify-center transition-opacity',
+                'relative flex h-full min-w-[2px] items-center justify-center transition-opacity',
                 STATUS[status].bar,
                 active.size > 0 && !isActive ? 'opacity-20' : 'opacity-100',
                 'hover:opacity-75',
               )}
             >
+              {/* The dealt-with share is hatched out from the right, so the
+                  band still shows what the report found while the solid part
+                  is what is left to do. */}
+              {doneShare > 0 && (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-y-0 right-0"
+                  style={{
+                    width: `${doneShare}%`,
+                    backgroundImage:
+                      'repeating-linear-gradient(135deg, transparent 0 3px, rgba(0,0,0,0.55) 3px 6px)',
+                  }}
+                />
+              )}
               {/* Only label a band wide enough to hold the number without
                   clipping; the legend below carries the rest. */}
               {share >= 6 && (
-                <span className="font-mono text-[10px] font-semibold text-surface-0">
-                  {counts[status]}
+                <span className="relative font-mono text-[10px] font-semibold text-surface-0">
+                  {counts[status] - done[status] > 0 && done[status] > 0
+                    ? `${counts[status] - done[status]}/${counts[status]}`
+                    : counts[status]}
                 </span>
               )}
             </button>
@@ -162,6 +184,14 @@ export function StatusBar({
                 <span className="font-mono tabular-nums text-ink-faint/60">
                   {total > 0 ? `${((count / total) * 100).toFixed(0)}%` : '0%'}
                 </span>
+                {done[status] > 0 && (
+                  <span
+                    className="font-mono tabular-nums text-ok/80"
+                    title={`${done[status]} dealt with since the report`}
+                  >
+                    ✓{done[status]}
+                  </span>
+                )}
               </button>
             </li>
           )

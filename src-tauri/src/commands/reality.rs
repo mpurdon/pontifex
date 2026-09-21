@@ -82,14 +82,26 @@ fn detail_type_name(document: &Value, override_name: Option<&str>) -> Result<Str
     })
 }
 
+/// A registered schema as the report graded it: the document, the type its
+/// events are checked against, and which version that was.
+struct FetchedSchema {
+    content: Value,
+    type_name: String,
+    version: Option<String>,
+    /// As AWS formats it — the same string the schema list carries, so the
+    /// two can be compared for equality rather than parsed.
+    last_modified: Option<String>,
+}
+
 /// A registered schema's document and the type its events are checked
-/// against. A registry without the schema is `Error::NotFound`, which some
-/// callers treat as a finding rather than a failure.
-async fn fetch_schema(
+/// against, with the version stamp it was read at. A registry without the
+/// schema is `Error::NotFound`, which some callers treat as a finding rather
+/// than a failure.
+async fn fetch_schema_versioned(
     schemas: &aws_sdk_schemas::Client,
     registry: &str,
     name: &str,
-) -> Result<(Value, String)> {
+) -> Result<FetchedSchema> {
     let described = schemas
         .describe_schema()
         .registry_name(registry)
@@ -99,7 +111,24 @@ async fn fetch_schema(
         .map_err(map_sdk_error)?;
     let content: Value = serde_json::from_str(described.content().unwrap_or("{}"))?;
     let type_name = detail_type_name(&content, None)?;
-    Ok((content, type_name))
+    Ok(FetchedSchema {
+        content,
+        type_name,
+        version: described.schema_version().map(str::to_string),
+        last_modified: described
+            .last_modified()
+            .and_then(|d| d.fmt(aws_smithy_types::date_time::Format::DateTime).ok()),
+    })
+}
+
+/// [`fetch_schema_versioned`] for callers that only want the document.
+async fn fetch_schema(
+    schemas: &aws_sdk_schemas::Client,
+    registry: &str,
+    name: &str,
+) -> Result<(Value, String)> {
+    let fetched = fetch_schema_versioned(schemas, registry, name).await?;
+    Ok((fetched.content, fetched.type_name))
 }
 
 /// Every log group a scan should read, or just the one asked for.
@@ -491,6 +520,11 @@ pub struct ReportRow {
     /// quietly matching through.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wire_identity: Option<String>,
+    /// The schema version this row graded, so the screen can tell when the
+    /// schema has been saved since — that row is dealt with, without a re-run.
+    pub version: Option<String>,
+    /// When that version was written, as the schema list also reports it.
+    pub last_modified: Option<String>,
 }
 
 /// How a schema is faring against real traffic.
@@ -776,9 +810,16 @@ pub async fn registry_report(
                 let payloads: &[Value] = buckets.get(&key).map(Vec::as_slice).unwrap_or(&[]);
                 let seen = observed.get(&key).copied().unwrap_or(payloads.len());
 
+                // The version stamp is kept even when grading fails: an
+                // error row is still one you might fix by saving the schema.
+                let mut version = None;
+                let mut last_modified = None;
                 let graded = async {
-                    let (content, type_name) = fetch_schema(&schemas, &registry, &name).await?;
-                    graded_check(state, &identity, &content, &type_name, payloads).await
+                    let fetched = fetch_schema_versioned(&schemas, &registry, &name).await?;
+                    version = fetched.version.clone();
+                    last_modified = fetched.last_modified.clone();
+                    graded_check(state, &identity, &fetched.content, &fetched.type_name, payloads)
+                        .await
                 }
                 .await;
 
@@ -831,6 +872,8 @@ pub async fn registry_report(
                             status,
                             headline,
                             wire_identity,
+                            version,
+                            last_modified,
                         }
                     }
                     Err(e) => ReportRow {
@@ -841,6 +884,8 @@ pub async fn registry_report(
                         observed: seen,
                         status: RowStatus::Error,
                         headline: Some(e.to_string()),
+                        version,
+                        last_modified,
                         ..Default::default()
                     },
                 }

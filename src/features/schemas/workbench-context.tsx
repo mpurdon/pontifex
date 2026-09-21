@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
 import type { FilterStatus } from '@/features/report/status'
 
 interface WorkbenchValue {
@@ -20,6 +20,22 @@ interface WorkbenchValue {
   /** Which statuses the health report shows; empty means all. */
   healthStatuses: Set<FilterStatus>
   setHealthStatuses: (update: (prev: Set<FilterStatus>) => Set<FilterStatus>) => void
+  /**
+   * Rows you have marked done by hand, tied to the report they were marked
+   * on. A re-run replaces every row, so marks from an older report do not
+   * carry over to findings that may be new.
+   */
+  healthDone: HealthDone | null
+  toggleHealthDone: (reportAt: number, name: string) => void
+  /** Whether rows dealt with since the report are hidden rather than dimmed. */
+  healthHideDone: boolean
+  setHealthHideDone: (hide: boolean) => void
+}
+
+export interface HealthDone {
+  /** `RegistryReport.generatedAt` of the report these marks belong to. */
+  reportAt: number
+  names: Set<string>
 }
 
 const WorkbenchContext = createContext<WorkbenchValue | null>(null)
@@ -52,6 +68,17 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
   const [healthStatuses, setHealthStatuses] = useState<Set<FilterStatus>>(
     () => new Set(['missing']),
   )
+  const [healthDone, setHealthDone] = useState<HealthDone | null>(null)
+  const [healthHideDone, setHealthHideDone] = useState(false)
+
+  const toggleHealthDone = useCallback((reportAt: number, name: string) => {
+    setHealthDone((prev) => {
+      const names = new Set(prev?.reportAt === reportAt ? prev.names : [])
+      if (names.has(name)) names.delete(name)
+      else names.add(name)
+      return { reportAt, names }
+    })
+  }, [])
 
   const value = useMemo(
     () => ({
@@ -67,8 +94,22 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       setHealthFilter,
       healthStatuses,
       setHealthStatuses,
+      healthDone,
+      toggleHealthDone,
+      healthHideDone,
+      setHealthHideDone,
     }),
-    [selected, analysisOpen, chartsOpen, healthMinutes, healthFilter, healthStatuses],
+    [
+      selected,
+      analysisOpen,
+      chartsOpen,
+      healthMinutes,
+      healthFilter,
+      healthStatuses,
+      healthDone,
+      toggleHealthDone,
+      healthHideDone,
+    ],
   )
 
   return <WorkbenchContext.Provider value={value}>{children}</WorkbenchContext.Provider>

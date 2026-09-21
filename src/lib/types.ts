@@ -644,6 +644,16 @@ export interface ReportRow {
 
 /** An event type on the bus with no schema registered for it. */
 export interface UnregisteredEvent {
+  /** The schema version this row graded; `null` for a row never described. */
+  version: string | null
+  /**
+   * When that version was written, in the same form `SchemaSummary` carries.
+   *
+   * A schema whose listed timestamp no longer matches has been saved since
+   * the report — which is how the Health screen tells a row is dealt with
+   * without re-running the scan.
+   */
+  lastModified: string | null
   source: string
   detailType: string
   count: number

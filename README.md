@@ -417,6 +417,17 @@ window, so "no traffic" says nothing useful until you re-run it.
 #### Drafting a schema for an undocumented event
 
 The **on the bus with no schema** rows are clickable. Clicking one drafts a
+**Fixing a row does not need a re-run to show.** Each row records the schema
+version it graded, and the screen holds that against the live registry list:
+save a schema from the editor and its row is dimmed and tagged *saved since
+this report* the moment the write lands; draft a schema for an undocumented
+type and that row is tagged *schema added*. Anything the registry cannot
+vouch for — a finding you fixed on the producer's side, or decided to leave —
+you can **mark done** from the row's hover actions, and undo the same way.
+Dealt-with rows are hatched out of the health bar, dropped from bulk filing,
+and can be hidden outright with the **done** chip. Marks belong to the report
+they were made on; a re-run starts clean, since its findings may be new.
+
 schema whose payload shape is **inferred from that event type's own traffic**,
 so the draft opens describing what is actually being published rather than as a
 blank form. It uses cached events when available, so this is usually instant.
