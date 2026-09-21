@@ -640,10 +640,6 @@ export interface ReportRow {
    * event's own `source` is then looking for a name that does not exist.
    */
   wireIdentity?: string
-}
-
-/** An event type on the bus with no schema registered for it. */
-export interface UnregisteredEvent {
   /** The schema version this row graded; `null` for a row never described. */
   version: string | null
   /**
@@ -654,6 +650,10 @@ export interface UnregisteredEvent {
    * without re-running the scan.
    */
   lastModified: string | null
+}
+
+/** An event type on the bus with no schema registered for it. */
+export interface UnregisteredEvent {
   source: string
   detailType: string
   count: number
