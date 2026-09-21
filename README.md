@@ -205,6 +205,29 @@ independently:
 3. **LLM profile** — a *separate* AWS profile used only for Bedrock calls, so
    schema work and model calls can authenticate as different principals.
 
+### Which model does what
+
+Pontifex ships no hard-coded model. Every LLM call goes through Amazon Bedrock,
+and the candidates are whatever is in the model catalog: the
+`ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` entries imported from your Claude
+Code settings, or the inference profiles (falling back to Anthropic foundation
+models) listed live from Bedrock in **Settings → AI**. You pick one as the
+default; any call can also name a model explicitly.
+
+| Action                                            | Model                                                          |
+| ------------------------------------------------- | -------------------------------------------------------------- |
+| Generate, refactor, explain a schema (**Generate**) | The selected model — typically Opus or Sonnet                  |
+| Suggest a repair for a check-against-reality issue | The *fast* model: the catalog entry whose id or label contains `haiku`, else the selected model |
+| Summarize what changed between schema versions    | Same fast-model rule                                           |
+
+The split is deliberate: the two short calls answer a bounded question once per
+click, so a small model is quicker and cheaper for no worse an answer, while
+schema authoring gets the larger one (`resolve_fast_model` in
+`src-tauri/src/commands/bedrock.rs`).
+
+Everything else is deterministic code, not a model: severity grading, origin
+impact analysis, schema inference from samples, and envelope validation.
+
 ## Safety
 
 Production changes are allowed — they just should not be one keystroke away:
