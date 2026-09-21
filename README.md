@@ -309,9 +309,11 @@ traffic, or missing fields producers started sending. **Reality** samples recent
 events for this schema from CloudWatch and reports where the schema and the bus
 disagree:
 
-- **Validation failures** — events that would be rejected, grouped by which
+- **Validation failures** — events the schema rejects, grouped by which
   check failed rather than by message text, so one recurring problem is one row
-  with a count.
+  with a count. "Rejects" means the registered schema fails them under the
+  bus's rules; EventBridge delivers every event regardless, and the bus's
+  validator alerts on failures rather than blocking them.
 - **Fields in events but not in the schema** — with how often each appears and
   an example value. Add them one at a time with the **+** on each row, or all
   the top-level ones at once. A nested path is resolved through the ref graph
@@ -328,11 +330,12 @@ frequency, so `95%` and `3%` are visible at a glance. A field declared
 
 #### How severity is graded
 
-The validator alone knows one thing: whether the registered schema throws
-the events away. So on its own a problem is **rejected** (the bus drops these
-events today), **drifting** (the schema and the traffic disagree, nothing is
-rejected) or a **note** (a declared field the sample never contained). That
-says whether the contract is enforced, not whether anyone downstream cares.
+The validator alone knows one thing: whether the registered schema rejects
+the events. So on its own a problem is **rejected by schema** (the contract
+as registered fails these events — they are still delivered), **drifting**
+(the schema and the traffic disagree, the schema does not reject them) or a
+**note** (a declared field the sample never contained). That says whether
+the contract is honoured, not whether anyone downstream cares.
 
 The origin lookup supplies the other half. Every consumer file it finds is
 read for the fields it takes off the event — `event.detail.payload.matterId`,
@@ -347,11 +350,11 @@ unwraps the detail into first (`const d = event.detail.payload; d.matterId`)
   but a handler reads is raised from a note to a warning.
 - **no consumer reads it** — consumer files that read this event's fields
   were found, and none reads this one or passes its parent along. Drift
-  here is downgraded to a note. A handler that hands `payload` whole to
-  another module might read anything inside it, so such a field keeps the
-  validator's grade and the tooltip says why.
-- **rejected** stays an error regardless: a rejected event reaches nobody,
-  every reader of every field included.
+  here is downgraded to a note, and a rejection to a warning: the contract
+  is broken, but since EventBridge delivers the event anyway, nothing found
+  is broken by it. A handler that hands `payload` whole to another module
+  might read anything inside it, so such a field keeps the validator's grade
+  and the tooltip says why.
 
 A file is a reader only when it actually reads fields, so a rule
 configuration that merely subscribes does not count, and nothing is
@@ -387,8 +390,8 @@ never treated as covering a window, since it stopped early and absence proves
 nothing. Settings → Cached events shows the size and can clear it.
 
 Only the event `detail` is validated — the envelope is AWS's, not yours.
-`nullable` is translated to JSON Schema's `["type", "null"]` first, or every
-legitimately-null field would read as a violation.
+`nullable: true` is honoured, as the bus's Ajv honours it: a null against a
+nullable field is not a finding.
 
 This is a read-only diagnostic. Suggested additions land in the draft; nothing
 is written to AWS until you save.
@@ -669,6 +672,25 @@ be saved:
   consistent with the name the schema is being saved under
 - `properties.detail.$ref` resolving to a schema that exists in the document
 - every component schema compiling as valid JSON Schema
+- the document being OpenAPI 3.0 as the registry stores it
+
+The last one is the check the registry itself makes on every write, made
+early and made legible. The registry answers a violation with `Content is
+not valid OpenAPI 3.0: 'components/schemas/X' oneOf failed`, naming the
+component and nothing else; Pontifex names the field and the keyword. The
+spellings that trip it are JSON Schema's: a `type` list (`["string",
+"null"]`), `type: "null"`, `const`, `examples`, `$schema`, and any keyword
+OpenAPI 3.0 does not define. "Or null" is `nullable: true` — which the bus's
+Ajv honours — and a genuine union is `anyOf`. Everything Pontifex writes
+itself (inferred drafts, declared fields, widened types, the *accepts null*
+checkbox) uses those spellings, and **Rewrite as OpenAPI 3.0** beside the
+finding converts a pasted JSON Schema in one step, reviewed as a diff.
+
+Two things the validator reports about the bus rather than the registry:
+`exclusiveMinimum`/`exclusiveMaximum` are booleans in OpenAPI 3.0 and
+numbers in draft-07, so no spelling satisfies both and `minimum`/`maximum`
+is the advice; and `nullable` without a `type` is the one `nullable` Ajv
+refuses to compile.
 
 Findings are rendered inline in the editor gutter and listed below it.
 

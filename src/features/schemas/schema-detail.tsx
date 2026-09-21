@@ -389,18 +389,19 @@ export function SchemaDetailPanel({
           {/* Offered beside the finding rather than in the toolbar, so the
               repair stays attached to the reason for it. The validator says
               which findings have one; the editor does not guess. */}
-          {findings.some((f) => f.fix === 'widenNullable') && (
+          {findings.some((f) => f.fix === 'openapi30') && (
             <div className="mt-1 pl-2">
               <Button
                 variant="ghost"
                 size="sm"
                 title={
-                  'Rewrite every `nullable: true` as a type that includes "null", ' +
-                  'which draft-07 honours — then review the diff before saving.'
+                  'Rewrite the JSON Schema spellings the registry refuses — type lists, ' +
+                  '`type: "null"`, `const`, `examples`, `$schema` — into OpenAPI 3.0, ' +
+                  'then review the diff before saving.'
                 }
                 onClick={async () => {
                   try {
-                    const repair = await ipc.widenNullableSchema(JSON.parse(text))
+                    const repair = await ipc.openapi30Schema(JSON.parse(text))
                     setDraft(stringify(repair.content))
                     setView('diffLive')
                   } catch {
@@ -408,7 +409,7 @@ export function SchemaDetailPanel({
                   }
                 }}
               >
-                Fix all <span className="font-mono">nullable</span> fields
+                Rewrite as OpenAPI 3.0
               </Button>
             </div>
           )}

@@ -25,7 +25,12 @@ pub struct SchemaSummary {
     pub arn: Option<String>,
 }
 
-fn summarize(name: String, version: Option<String>, last_modified: Option<String>, arn: Option<String>) -> SchemaSummary {
+fn summarize(
+    name: String,
+    version: Option<String>,
+    last_modified: Option<String>,
+    arn: Option<String>,
+) -> SchemaSummary {
     // Discovered schemas occasionally land with names that do not follow the
     // convention, so parse leniently rather than failing the whole listing.
     let identity = EventIdentity::from_schema_name(&name).ok();
@@ -48,7 +53,10 @@ async fn schemas_client(
     env_id: Option<&str>,
 ) -> Result<(String, aws_sdk_schemas::Client)> {
     let (env, cfg) = state.env_config(env_id).await?;
-    Ok((env.registry_name.clone(), aws_sdk_schemas::Client::new(&cfg)))
+    Ok((
+        env.registry_name.clone(),
+        aws_sdk_schemas::Client::new(&cfg),
+    ))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,7 +105,8 @@ pub async fn list_registries(
 
     // Discovered/AWS-managed registries last; the ones the stack owns first.
     out.sort_by(|a, b| {
-        let owned = |r: &RegistrySummary| !r.name.starts_with("aws.") && r.name != "discovered-schemas";
+        let owned =
+            |r: &RegistrySummary| !r.name.starts_with("aws.") && r.name != "discovered-schemas";
         owned(b).cmp(&owned(a)).then(a.name.cmp(&b.name))
     });
     Ok(out)
@@ -124,7 +133,9 @@ pub async fn list_schemas(
     while let Some(page) = pages.next().await {
         let page = page.map_err(map_sdk_error)?;
         for s in page.schemas() {
-            let Some(name) = s.schema_name() else { continue };
+            let Some(name) = s.schema_name() else {
+                continue;
+            };
             out.push(summarize(
                 name.to_string(),
                 s.version_count().map(|v| v.to_string()),
@@ -296,8 +307,8 @@ pub async fn schema_history(
         format!("fetching {} versions of {name}", versions.len()),
     );
 
-    let entries: Vec<Result<SchemaHistoryEntry>> = futures::stream::iter(
-        versions.into_iter().map(|version| {
+    let entries: Vec<Result<SchemaHistoryEntry>> =
+        futures::stream::iter(versions.into_iter().map(|version| {
             let client = client.clone();
             let registry = registry.clone();
             let name = name.clone();
@@ -318,11 +329,10 @@ pub async fn schema_history(
                         .unwrap_or(Value::Null),
                 })
             }
-        }),
-    )
-    .buffer_unordered(HISTORY_CONCURRENCY)
-    .collect()
-    .await;
+        }))
+        .buffer_unordered(HISTORY_CONCURRENCY)
+        .collect()
+        .await;
 
     let mut history: Vec<SchemaHistoryEntry> = entries.into_iter().collect::<Result<_>>()?;
     history.sort_by_key(|e| std::cmp::Reverse(e.version.parse::<u64>().unwrap_or(0)));
@@ -352,7 +362,9 @@ pub async fn search_schemas(
     while let Some(page) = pages.next().await {
         let page = page.map_err(map_sdk_error)?;
         for s in page.schemas() {
-            let Some(name) = s.schema_name() else { continue };
+            let Some(name) = s.schema_name() else {
+                continue;
+            };
             // Search results carry versions rather than a top-level version.
             let latest = s
                 .schema_versions()
@@ -360,7 +372,12 @@ pub async fn search_schemas(
                 .filter_map(|v| v.schema_version())
                 .max_by_key(|v| v.parse::<u64>().unwrap_or(0))
                 .map(str::to_string);
-            out.push(summarize(name.to_string(), latest, None, s.schema_arn().map(str::to_string)));
+            out.push(summarize(
+                name.to_string(),
+                latest,
+                None,
+                s.schema_arn().map(str::to_string),
+            ));
         }
     }
 
@@ -404,7 +421,13 @@ pub async fn put_schema(
     if !bad_chars.is_empty() {
         let rendered: Vec<String> = bad_chars
             .iter()
-            .map(|c| if *c == ' ' { "space".to_string() } else { format!("'{c}'") })
+            .map(|c| {
+                if *c == ' ' {
+                    "space".to_string()
+                } else {
+                    format!("'{c}'")
+                }
+            })
             .collect();
         return Err(Error::Invalid(format!(
             "EventBridge will not accept the schema name '{name}' — it contains {}. \
@@ -523,7 +546,10 @@ pub async fn delete_schema(
     lwarn!(
         cat::REGISTRY,
         "deleting {name}{} from {registry} (environment '{}', protected={})",
-        version.as_ref().map(|v| format!(" v{v}")).unwrap_or_default(),
+        version
+            .as_ref()
+            .map(|v| format!(" v{v}"))
+            .unwrap_or_default(),
         env.label,
         env.is_protected()
     );
@@ -550,7 +576,10 @@ pub async fn delete_schema(
 
     match &result {
         Ok(()) => linfo!(cat::REGISTRY, "deleted {name} from {registry}"),
-        Err(e) => lerror!(cat::REGISTRY, "failed to delete {name} from {registry}: {e}"),
+        Err(e) => lerror!(
+            cat::REGISTRY,
+            "failed to delete {name} from {registry}: {e}"
+        ),
     }
     result
 }
@@ -626,28 +655,25 @@ pub fn simplify_schema(content: Value) -> Result<SimplifyPreview> {
     })
 }
 
-/// What rewriting `nullable` would do to a document, without applying it.
+/// What rewriting a document into OpenAPI 3.0 would do, without applying it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NullableRepair {
+pub struct Openapi30Repair {
     pub content: Value,
-    /// JSON Pointers to the fields that were widened, for the diff view.
+    /// JSON Pointers to the schema objects that were rewritten, for the diff.
     pub changed: Vec<String>,
 }
 
-/// Rewrite every `nullable: true` into the `type: [T, "null"]` spelling.
+/// Rewrite the JSON Schema spellings the registry refuses — `type` lists,
+/// `type: "null"`, `const`, `examples`, `$schema` — into OpenAPI 3.0.
 ///
-/// The repair for the `nullable` finding in [`crate::schema::validate`]: the
-/// bus validates with Ajv, which has no `nullable`, so those fields reject
-/// `null` today. This is a preview — the caller decides whether to keep it.
+/// The repair for the OpenAPI findings in [`crate::schema::validate`]. A
+/// preview: the caller decides whether to keep it.
 #[tauri::command]
-pub fn widen_nullable_schema(content: Value) -> Result<NullableRepair> {
+pub fn openapi_30_schema(content: Value) -> Result<Openapi30Repair> {
     let parsed = model::parse_content(&content)?;
-    let changed = openapi::nullable_sites(&parsed);
-    Ok(NullableRepair {
-        content: openapi::widen_nullable(&parsed),
-        changed,
-    })
+    let (content, changed) = openapi::to_openapi_30(&parsed);
+    Ok(Openapi30Repair { content, changed })
 }
 
 // ---------------------------------------------------------------------------

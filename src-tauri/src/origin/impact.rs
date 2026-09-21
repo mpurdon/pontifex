@@ -187,6 +187,10 @@ mod tests {
                 file("src/other.ts", &["matterId"]),
             ]),
         );
+        // A rejected field somebody reads is an error on both counts.
+        let mut read = issues();
+        grade(&mut read, &origin(vec![file("h.ts", &["count"])]));
+        assert_eq!(severity_of(&read, "wrongType:count"), IssueSeverity::Error);
         let extra = find(&list, "undeclared:extra");
         assert_eq!(extra.severity, IssueSeverity::Error);
         let impact = extra.impact.as_ref().unwrap();
@@ -198,8 +202,12 @@ mod tests {
         assert_eq!(note.severity, IssueSeverity::Info);
         assert!(note.impact.as_ref().unwrap().readers.is_empty());
 
-        // Rejected stays rejected whoever reads it.
-        assert_eq!(severity_of(&list, "wrongType:count"), IssueSeverity::Error);
+        // A rejection nobody found depends on is a broken contract, not a
+        // broken consumer: one step down, never a note.
+        assert_eq!(
+            severity_of(&list, "wrongType:count"),
+            IssueSeverity::Warning
+        );
         // Errors first, so the ranking follows the new grade.
         assert_eq!(list[0].severity, IssueSeverity::Error);
     }

@@ -62,7 +62,9 @@ pub fn validator_for(schema: &Value) -> Result<Validator> {
     if let Some(dialect) = foreign_dialect(schema) {
         return Err(Error::Invalid(foreign_dialect_message(&dialect)));
     }
-    compile(schema)
+    // `nullable` is the one OpenAPI keyword Ajv honours and this crate does
+    // not; widened here, on a copy, so every grade agrees with the bus.
+    compile(&crate::schema::openapi::widen_nullable(schema))
 }
 
 /// Compile without re-scanning for a foreign dialect.
@@ -198,11 +200,19 @@ impl Format {
 }
 
 const fn asserted(name: &'static str, assert: FormatCheck) -> Format {
-    Format { name, provenance: Provenance::Asserted, assert }
+    Format {
+        name,
+        provenance: Provenance::Asserted,
+        assert,
+    }
 }
 
 const fn other(name: &'static str, provenance: Provenance) -> Format {
-    Format { name, provenance, assert: accept_all }
+    Format {
+        name,
+        provenance,
+        assert: accept_all,
+    }
 }
 
 /// Every format the bus's validator has an opinion about.
@@ -244,7 +254,10 @@ static FORMATS: &[Format] = &[
 ];
 
 fn provenance(name: &str) -> Option<Provenance> {
-    FORMATS.iter().find(|f| f.name == name).map(|f| f.provenance)
+    FORMATS
+        .iter()
+        .find(|f| f.name == name)
+        .map(|f| f.provenance)
 }
 
 /// Does `ajv-formats` define this name at all?
@@ -324,21 +337,27 @@ fn is_date(s: &str) -> bool {
     let Ok(Some(caps)) = DATE.captures(s) else {
         return false;
     };
-    let part = |i: usize| caps.get(i).map_or(0, |m| m.as_str().parse::<u32>().unwrap_or(0));
+    let part = |i: usize| {
+        caps.get(i)
+            .map_or(0, |m| m.as_str().parse::<u32>().unwrap_or(0))
+    };
     let (year, month, day) = (part(1), part(2), part(3));
     (1..=12).contains(&month)
         && day >= 1
-        && day <= if month == 2 && is_leap_year(year) {
-            29
-        } else {
-            DAYS[month as usize]
-        }
+        && day
+            <= if month == 2 && is_leap_year(year) {
+                29
+            } else {
+                DAYS[month as usize]
+            }
 }
 
 /// `ajv-formats`' `TIME`, which also yields the offset so leap seconds can be
 /// checked against UTC rather than local time.
 static TIME: LazyLock<Regex> = LazyLock::new(|| {
-    compiled(r"(?i)^([0-9][0-9]):([0-9][0-9]):([0-9][0-9](?:\.[0-9]+)?)(z|([+-])([0-9][0-9])(?::?([0-9][0-9]))?)?$")
+    compiled(
+        r"(?i)^([0-9][0-9]):([0-9][0-9]):([0-9][0-9](?:\.[0-9]+)?)(z|([+-])([0-9][0-9])(?::?([0-9][0-9]))?)?$",
+    )
 });
 
 /// RFC 3339 `full-time`. `strict_time_zone` is what separates `time` (offset
@@ -470,8 +489,7 @@ regex_format!(
 
 /// `ajv-formats` writes the dotted-quad tail out eight times; keeping the shape
 /// identical is what makes this checkable against the original.
-const IPV4_IN_IPV6: &str =
-    r"((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3})";
+const IPV4_IN_IPV6: &str = r"((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3})";
 
 regex_format!(
     is_ipv6,
@@ -574,14 +592,20 @@ mod tests {
             json!("123e4567-e89b-12d3-a456-426614174000")
         ));
         assert!(!valid(json!({ "format": "duration" }), json!("P")));
-        assert!(valid(json!({ "format": "duration" }), json!("P3Y6M4DT12H30M5S")));
+        assert!(valid(
+            json!({ "format": "duration" }),
+            json!("P3Y6M4DT12H30M5S")
+        ));
     }
 
     #[test]
     fn ignores_the_formats_ajv_does_not_implement() {
         // The crate implements `idn-hostname` and would reject this; Ajv logs
         // "unknown format" and lets it through, so pontifex must too.
-        assert!(valid(json!({ "format": "idn-hostname" }), json!("-not a hostname-")));
+        assert!(valid(
+            json!({ "format": "idn-hostname" }),
+            json!("-not a hostname-")
+        ));
         assert!(valid(json!({ "format": "iri" }), json!("not an iri")));
     }
 

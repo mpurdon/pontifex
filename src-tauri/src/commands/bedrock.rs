@@ -346,7 +346,7 @@ Choose exactly one repair, or none:
 
 Types must be JSON type names: null, boolean, integer, number, string, array, object.
 
-Prefer the repair that stops events being rejected while narrowing the schema as little as possible, and prefer none over a guess. Say plainly in the rationale what the edit gives up.
+Prefer the repair that makes the schema accept the events while narrowing it as little as possible, and prefer none over a guess. Say plainly in the rationale what the edit gives up.
 
 Respond with ONLY this JSON, no prose or fences:
 {"repair": <one of the above, or null>, "rationale": "<one sentence>"}"#;
@@ -516,7 +516,7 @@ pub async fn ai_suggest_repair(
         affected = issue.affected,
         sampled = issue.sampled,
         rejecting = if issue.rejects {
-            ", which are being rejected today"
+            ", which the schema rejects"
         } else {
             ""
         },
@@ -601,10 +601,7 @@ pub async fn list_bedrock_models(state: State<'_, AppState>) -> Result<Vec<Bedro
 
     let mut models = Vec::new();
 
-    let mut pages = client
-        .list_inference_profiles()
-        .into_paginator()
-        .send();
+    let mut pages = client.list_inference_profiles().into_paginator().send();
     while let Some(page) = pages.next().await {
         let page = page.map_err(map_sdk_error)?;
         for p in page.inference_profile_summaries() {
@@ -778,6 +775,9 @@ mod tests {
 
     #[test]
     fn a_description_the_model_wrapped_in_quotes_is_unwrapped() {
-        assert_eq!(clamp_description("  \"Declared 3 fields.\"  "), "Declared 3 fields.");
+        assert_eq!(
+            clamp_description("  \"Declared 3 fields.\"  "),
+            "Declared 3 fields."
+        );
     }
 }

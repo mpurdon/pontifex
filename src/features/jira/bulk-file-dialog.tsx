@@ -192,7 +192,11 @@ export function BulkFileDialog({
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
-                      {row.issue.rejects && <Badge tone="danger">rejected today</Badge>}
+                      {row.issue.rejects && (
+                        <Badge tone="danger" title="The registered schema rejects these events; EventBridge delivers them regardless">
+                          rejected by schema
+                        </Badge>
+                      )}
                       {row.issue.kind === 'unregistered' && (
                         <Badge tone="warn">no schema</Badge>
                       )}

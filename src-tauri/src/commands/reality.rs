@@ -535,7 +535,7 @@ pub struct ReportRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RowStatus {
-    /// Real events are being rejected by the schema.
+    /// The schema rejects real events (they are still delivered).
     Failing,
     /// The schema could not be read or graded.
     Error,

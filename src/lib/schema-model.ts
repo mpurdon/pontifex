@@ -103,20 +103,11 @@ export interface SchemaNode {
   type: NodeType
   required: boolean
   /**
-   * Whether `null` is an accepted value — i.e. `type` includes `"null"`.
-   *
-   * Distinct from [`nullable`], and the only one of the two that means
-   * anything at runtime.
+   * Whether `null` is an accepted value: `nullable: true`, the OpenAPI 3.0
+   * spelling the registry stores and the bus's Ajv honours, or a `type` list
+   * naming `"null"`, which a pasted JSON Schema may carry.
    */
   acceptsNull: boolean
-  /**
-   * Whether the OpenAPI `nullable` keyword is present and true.
-   *
-   * Kept solely so the UI can flag it. Ajv has no implementation of `nullable`,
-   * so the bus ignores it and a field marked this way still rejects `null` —
-   * which is why this is surfaced as a defect rather than as a null checkbox.
-   */
-  nullable: boolean
   description?: string
   format?: string
   enumValues?: unknown[]
@@ -187,10 +178,9 @@ export function componentSchemas(doc: unknown): Record<string, JsonObject> {
 /**
  * The declared type names, as a list.
  *
- * `type` is a string far more often than an array, but the array form is how
- * draft-07 spells "or null" — the spelling pontifex now writes, and the one the
- * bus honours — so reading only the string form would show every nullable
- * field as untyped.
+ * `type` is a string in every document the registry stores; the array form is
+ * how a pasted JSON Schema spells "or null", and reading only the string form
+ * would show such a field as untyped.
  */
 export function typeNames(schema: JsonObject): string[] {
   const type = schema.type
@@ -306,8 +296,7 @@ function buildNode(
     ...opts,
     ownPointer: opts.pointer,
     type,
-    acceptsNull: declared.includes('null'),
-    nullable: schema.nullable === true,
+    acceptsNull: declared.includes('null') || schema.nullable === true,
     description:
       typeof schema.description === 'string' ? schema.description : undefined,
     format: typeof schema.format === 'string' ? schema.format : undefined,
@@ -540,14 +529,13 @@ export function setKeywords(
 }
 
 /**
- * Widen or narrow a node's `type` to include `null`.
+ * Make a node accept `null`, or stop it.
  *
- * Writes the `type: [T, "null"]` spelling rather than `nullable: true`, and
- * clears any `nullable` it finds on the way: the bus validates with Ajv, which
- * has no `nullable`, so the keyword form promises something it does not
- * deliver. A node with no declared type is left alone — it already accepts
- * null, and inventing `type: ["null"]` would assert the field is *always*
- * null, a constraint nobody asked for.
+ * Writes `nullable: true`, the OpenAPI 3.0 spelling: it is what the registry
+ * stores (a `type` list is refused on save) and the bus's Ajv honours it. Any
+ * `"null"` in a `type` list is folded away on the same edit. A node with no
+ * declared type is left alone — it already accepts null, and OpenAPI 3.0 has
+ * no way to assert a field is *always* null.
  */
 export function setAcceptsNull(
   doc: unknown,
@@ -559,15 +547,14 @@ export function setAcceptsNull(
   if (!target || typeof target !== 'object') return next
 
   const schema = target as JsonObject
-  delete schema.nullable
-
   const named = namedTypes(schema)
   if (named.length === 0) return next
 
-  if (accepts) schema.type = [...named, 'null']
-  // Back to the plain string form when there is only one type left, so a
-  // round trip through the checkbox does not leave `["string"]` behind.
-  else schema.type = named.length === 1 ? named[0] : named
+  // Back to the plain string form: a list is not a spelling the registry
+  // will take, whatever it holds.
+  schema.type = named.length === 1 ? named[0] : named
+  if (accepts) schema.nullable = true
+  else delete schema.nullable
   return next
 }
 
@@ -722,13 +709,12 @@ export function setNodeType(
 
   const rebuilt: JsonObject = { ...blankSchemaFor(type), ...preserved }
 
-  // Carried across as the widened `type`, never as `nullable` — retyping a
-  // field is not the moment to hand it a keyword the bus ignores. A `ref` has
-  // no `type` to widen.
+  // Null acceptance survives a retype. A `ref` has no type of its own to
+  // qualify.
   const wasNullable =
     previous.nullable === true || typeNames(previous).includes('null')
   if (wasNullable && type !== 'ref' && typeof rebuilt.type === 'string') {
-    rebuilt.type = [rebuilt.type, 'null']
+    rebuilt.nullable = true
   }
 
   // Keep a compatible sub-shape rather than throwing it away.

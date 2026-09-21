@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use crate::schema::repair::Repair;
 use crate::schema::{ajv, openapi};
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Why one sampled event failed validation.
@@ -171,9 +171,9 @@ pub fn unregistered_issue(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum IssueSeverity {
-    /// Events are being rejected, or would be.
+    /// The schema rejects these events, or a consumer reads the field.
     Error,
-    /// The schema is wrong about traffic, but nothing is rejected.
+    /// The schema is wrong about traffic, or nobody found depends on it.
     Warning,
     /// Worth knowing, not worth doing anything about on its own.
     Info,
@@ -209,7 +209,9 @@ pub struct Issue {
     /// Events exhibiting this, out of `sampled`.
     pub affected: usize,
     pub sampled: usize,
-    /// Whether validation rejects these events today.
+    /// Whether the registered schema rejects these events under the bus's
+    /// validation rules. Not whether they are lost: EventBridge delivers
+    /// every event regardless, and the bus's validator only alerts.
     pub rejects: bool,
     pub example: Option<Value>,
     /// The validator's own message, when one applies.
@@ -417,17 +419,12 @@ fn resolve_ref<'a>(document: &'a Value, schema: &'a Value) -> (Option<String>, &
     (None, schema)
 }
 
-/// The type names a schema node declares.
-///
-/// `nullable: true` deliberately does **not** add `"null"` here. It reads as
-/// though it should, and this function used to do it, which made the drift
-/// report quietly disagree with the thing it is reporting on: the bus has no
-/// implementation of `nullable`, so a `{"type": "string", "nullable": true}`
-/// field that receives `null` is rejected in production. Adding `"null"` hid
-/// exactly the mismatch worth showing. The `type: [T, "null"]` spelling below
-/// is the one draft-07 honours, and is what `openapi::widen_nullable` produces.
+/// The type names a schema node declares, `nullable: true` counted as
+/// `"null"` — which is how the bus's Ajv reads it, and how the registry
+/// spells "or null". (A `type` list is read too, for a pasted JSON Schema,
+/// though the registry will not store one.)
 fn declared_types(schema: &Value) -> Vec<String> {
-    match schema.get("type") {
+    let mut types = match schema.get("type") {
         Some(Value::String(t)) => vec![t.clone()],
         Some(Value::Array(list)) => list
             .iter()
@@ -436,7 +433,14 @@ fn declared_types(schema: &Value) -> Vec<String> {
             .collect(),
         _ if schema.get("properties").is_some() => vec!["object".to_string()],
         _ => Vec::new(),
+    };
+    if schema.get("nullable").and_then(Value::as_bool) == Some(true)
+        && !types.is_empty()
+        && !types.iter().any(|t| t == "null")
+    {
+        types.push("null".to_string());
     }
+    types
 }
 
 fn declare_object(
@@ -594,10 +598,7 @@ pub fn check_events(
             }),
             Some(field) => {
                 // Only flag a contradiction when the schema actually declares a
-                // type. A `null` against a `nullable: true` field *is* a
-                // contradiction — the bus ignores `nullable` — so it is
-                // reported like any other wrong type; `validate::check_ajv_parity`
-                // supplies the explanation.
+                // type; `nullable: true` is read as declaring `null`.
                 if !field.types.is_empty() {
                     let unexpected: Vec<String> = types
                         .iter()
@@ -865,8 +866,8 @@ fn field_label(path: &str) -> String {
 /// The two views overlap almost entirely — a type mismatch on a declared field
 /// is also a rejection — so presenting both meant reading the same problem
 /// twice with two different denominators. Here the rejection is a *property* of
-/// the problem rather than a second entry: `rejects` says whether events are
-/// being thrown away over it.
+/// the problem rather than a second entry: `rejects` says whether the schema
+/// fails them.
 /// What a matched validation failure says about an issue: how many events,
 /// whether they are rejected, and the validator's words.
 ///
@@ -886,15 +887,16 @@ fn from_failure(
 /// The one severity rule, for the validator's grade and the consumer
 /// grade alike.
 ///
-/// The validator's floor: events being rejected is an error, a field the
-/// sample never carried is a note, and any other disagreement a warning.
-/// Consumers, when the origin lookup has found some, move it: a field
-/// somebody reads is an error whatever the validator said (a never-sent
-/// field that is read is a handler waiting on a value that never comes,
-/// so a warning); a field nobody reads or passes along is a note; and one
-/// passed along whole to code the scan cannot see keeps the floor.
-/// Rejection stays an error regardless: the whole event is lost, and every
-/// reader of every field with it.
+/// The validator's floor: the schema rejecting the events is an error, a
+/// field the sample never carried is a note, and any other disagreement a
+/// warning. Consumers, when the origin lookup has found some, move it: a
+/// field somebody reads is an error whatever the validator said (a
+/// never-sent field that is read is a handler waiting on a value that never
+/// comes, so a warning); a field nobody reads or passes along drops one
+/// step — a rejection to a warning, since EventBridge delivers the event
+/// regardless and the contract is broken where nothing found depends on it,
+/// and drift to a note; one passed along whole to code the scan cannot see
+/// keeps the floor.
 pub fn severity_for(
     kind: IssueKind,
     rejects: bool,
@@ -912,7 +914,11 @@ pub fn severity_for(
             IssueSeverity::Info => IssueSeverity::Warning,
             _ => IssueSeverity::Error,
         },
-        Some(i) if i.indirect.is_empty() && floor == IssueSeverity::Warning => IssueSeverity::Info,
+        Some(i) if i.indirect.is_empty() => match floor {
+            IssueSeverity::Error => IssueSeverity::Warning,
+            IssueSeverity::Warning => IssueSeverity::Info,
+            IssueSeverity::Info => IssueSeverity::Info,
+        },
         _ => floor,
     }
 }
@@ -1313,10 +1319,10 @@ pub fn add_observed_field(
 
 /// The schema snippet describing an observed field.
 ///
-/// A field seen as both a value and `null` is declared `type: [T, "null"]`
-/// rather than `nullable: true`. Both spellings say the same thing to a reader;
-/// only the first says it to Ajv, and this snippet exists precisely to stop the
-/// events that were observed from being rejected.
+/// A field seen as both a value and `null` is declared `type: T, nullable:
+/// true`: the OpenAPI 3.0 spelling the registry stores, which the bus's Ajv
+/// honours. (`type: [T, "null"]` says the same thing and the registry refuses
+/// to save it.)
 fn declaration_for(field: &FieldObservation) -> Value {
     let non_null: Vec<&String> = field.types.iter().filter(|t| *t != "null").collect();
     let saw_null = field.types.iter().any(|t| t == "null");
@@ -1325,14 +1331,10 @@ fn declaration_for(field: &FieldObservation) -> Value {
     // Mixed or unknown types: leave it untyped rather than guessing.
     if let [single] = non_null.as_slice() {
         let single = single.as_str();
-        declaration.insert(
-            "type".into(),
-            if saw_null {
-                json!([single, "null"])
-            } else {
-                Value::String(single.to_string())
-            },
-        );
+        declaration.insert("type".into(), Value::String(single.to_string()));
+        if saw_null {
+            declaration.insert("nullable".into(), Value::Bool(true));
+        }
 
         // An observed object or array conveys nothing about its inner shape,
         // so leave it open rather than inventing one.
@@ -1433,29 +1435,27 @@ mod tests {
     }
 
     #[test]
-    fn a_null_against_nullable_is_a_failure_because_the_bus_rejects_it() {
-        // `note` is declared `{"type": "string", "nullable": true}`. pontifex used
-        // to widen that to `["string", "null"]` before validating and report a
-        // pass — but Ajv has no `nullable`, so the bus rejects this event. The
-        // pass was the bug: it hid a real rejection behind a tidy report.
+    fn a_null_against_nullable_passes_because_the_bus_honours_nullable() {
+        // `note` is declared `{"type": "string", "nullable": true}`. Ajv 8
+        // supports `nullable` by default, verified against the bus's own
+        // configuration; pontifex used to grade this as a rejection, which
+        // was a false alarm on hundreds of registry fields.
         let events = vec![json!({ "clientId": "a", "note": null })];
         let report = check_events(&document(), "Sync", &events).unwrap();
-        assert_eq!(report.failed, 1, "failures: {:?}", report.failures);
+        assert_eq!(report.passed, 1, "failures: {:?}", report.failures);
         assert!(
-            report.failures.iter().any(|f| f.pointer == "/note"),
+            report.drift.type_mismatches.is_empty(),
             "{:?}",
-            report.failures
+            report.drift
         );
     }
 
     #[test]
-    fn the_widened_spelling_does_accept_a_null() {
-        // The other half of the same story: once the document is repaired the
-        // event passes, so the finding is actionable rather than just true.
-        let repaired = openapi::widen_nullable(&document());
-        let events = vec![json!({ "clientId": "a", "note": null })];
-        let report = check_events(&repaired, "Sync", &events).unwrap();
-        assert_eq!(report.passed, 1, "failures: {:?}", report.failures);
+    fn a_null_against_a_plain_string_is_still_a_failure() {
+        let events = vec![json!({ "clientId": null })];
+        let report = check_events(&document(), "Sync", &events).unwrap();
+        assert_eq!(report.failed, 1, "failures: {:?}", report.failures);
+        assert!(report.failures.iter().any(|f| f.pointer == "/clientId"));
     }
 
     #[test]
@@ -1619,7 +1619,7 @@ mod tests {
         let issue = about_count[0];
         assert_eq!(issue.kind, IssueKind::WrongType);
         assert_eq!(issue.severity, IssueSeverity::Error);
-        assert!(issue.rejects, "these events are thrown away today");
+        assert!(issue.rejects, "the schema fails these events");
         assert_eq!(issue.affected, 1);
         assert_eq!(issue.sampled, 2);
         assert_eq!(issue.declared.as_deref(), Some("integer"));
@@ -1649,7 +1649,7 @@ mod tests {
     fn one_rejection_naming_several_fields_marks_all_of_them_rejected() {
         // A closed schema reports every unexpected property in a single error.
         // Matching only the first left the others reading "not rejected" while
-        // their events were being thrown away.
+        // their events were failing the schema.
         let closed = json!({
             "components": {
                 "schemas": {
@@ -1878,9 +1878,12 @@ mod tests {
                     .unwrap()
             ),
         );
-        // Seen as both null and string, so it is declared with both types —
-        // the spelling Ajv honours, not `nullable: true`.
-        assert_eq!(props["maybe"], json!({ "type": ["string", "null"] }));
+        // Seen as both null and string: the registry's spelling, which the
+        // bus honours.
+        assert_eq!(
+            props["maybe"],
+            json!({ "type": "string", "nullable": true })
+        );
         // Existing declarations are untouched.
         assert_eq!(props["clientId"], json!({ "type": "string" }));
     }
@@ -1950,7 +1953,7 @@ mod tests {
     }
 
     #[test]
-    fn declares_a_sometimes_null_field_with_both_types() {
+    fn declares_a_sometimes_null_field_as_nullable() {
         let field = FieldObservation {
             path: "maybe".into(),
             types: vec!["string".into(), "null".into()],
@@ -1960,7 +1963,7 @@ mod tests {
         let next = add_observed_field(&document(), "Sync", &field).unwrap();
         assert_eq!(
             next["components"]["schemas"]["Sync"]["properties"]["maybe"],
-            json!({ "type": ["string", "null"] })
+            json!({ "type": "string", "nullable": true })
         );
 
         // And the point of it: the nulls that prompted the suggestion now pass.
@@ -2069,15 +2072,17 @@ mod tests {
         // The everflowId case. `observed` holds only `null`, and the action line
         // reads "redeclare as null" — doing that literally would repair 7% of
         // the traffic by starting to reject the other 93%.
+        // `clientId` is a plain string; `note` in this fixture is already
+        // nullable, and a null there is no longer a finding.
         let events = vec![
-            json!({ "clientId": "a", "note": "hi" }),
-            json!({ "clientId": "b", "note": "there" }),
-            json!({ "clientId": "c", "note": null }),
+            json!({ "clientId": "a" }),
+            json!({ "clientId": "b" }),
+            json!({ "clientId": null }),
         ];
         let report = check_events(&document(), "Sync", &events).unwrap();
 
         assert_eq!(
-            offered(&report, "note"),
+            offered(&report, "clientId"),
             Some(Repair::WidenType {
                 types: vec!["string".into(), "null".into()]
             })
@@ -2160,14 +2165,11 @@ mod tests {
     fn a_repair_offered_for_a_wrong_type_actually_clears_it() {
         // The property worth testing: applying what the row offers makes the
         // row go away. A repair that does not is worse than no button.
-        let events = vec![
-            json!({ "clientId": "a", "note": "hi" }),
-            json!({ "clientId": "b", "note": null }),
-        ];
+        let events = vec![json!({ "clientId": "a" }), json!({ "clientId": null })];
         let report = check_events(&document(), "Sync", &events).unwrap();
-        let fix = offered(&report, "note").expect("a repair for note");
+        let fix = offered(&report, "clientId").expect("a repair for clientId");
 
-        let repaired = crate::schema::repair::apply(&document(), "Sync", "note", &fix).unwrap();
+        let repaired = crate::schema::repair::apply(&document(), "Sync", "clientId", &fix).unwrap();
         let after = check_events(&repaired, "Sync", &events).unwrap();
 
         assert_eq!(

@@ -32,14 +32,15 @@ const SEVERITY_WORD: Record<IssueSeverity, string> = {
  * "Error" and "warning" read as impact levels, and until the origin lookup
  * has found who reads a field they are not: the validator only knows whether
  * the bus rejects the events. So the badge says the thing that is actually
- * known — rejected, read by consumers, drifting unread — rather than a level
+ * known — rejected by the schema, read by consumers, drifting unread — rather than a level
  * the reader would have to guess the meaning of.
  */
 export function describeSeverity(issue: Issue): { label: string; title: string } {
-  if (issue.rejects) {
+  if (issue.rejects && !issue.impact) {
     return {
-      label: 'rejected',
-      title: 'Schema validation throws these events away today, so no consumer sees them at all',
+      label: 'rejected by schema',
+      title:
+        'The registered schema rejects these events. EventBridge still delivers them; the bus\u2019s validator alerts on failures rather than blocking. Who reads the field is unknown until the origin lookup has run.',
     }
   }
   const impact = issue.impact
@@ -47,26 +48,30 @@ export function describeSeverity(issue: Issue): { label: string; title: string }
     const readers = impact.readers.length
     const indirect = impact.indirect.length
     const found = `the ${impact.handlers} consumer file${impact.handlers === 1 ? '' : 's'} the origin lookup found`
+    const rejected = issue.rejects ? ' The schema rejects these events; EventBridge delivers them regardless.' : ''
     if (readers > 0) {
       return {
         label: `read by ${readers} consumer${readers === 1 ? '' : 's'}`,
-        title: `${readers} of ${found} read this field`,
+        title: `${readers} of ${found} read this field.${rejected}`,
       }
     }
     if (indirect > 0) {
       return {
-        label: SEVERITY_WORD[issue.severity],
-        title: `${indirect} of ${found} pass this field's parent along whole, so whether they read it is not visible`,
+        label: issue.rejects ? 'rejected by schema' : SEVERITY_WORD[issue.severity],
+        title: `${indirect} of ${found} pass this field's parent along whole, so whether they read it is not visible.${rejected}`,
       }
     }
-    return { label: 'no consumer reads it', title: `None of ${found} reads this field` }
+    return {
+      label: issue.rejects ? 'rejected, unread' : 'no consumer reads it',
+      title: `None of ${found} reads this field.${rejected}`,
+    }
   }
   return {
     label: SEVERITY_WORD[issue.severity],
     title:
       issue.severity === 'info'
         ? 'Worth knowing; nothing to do on its own'
-        : 'The schema and the traffic disagree, but nothing is rejected. Who reads the field is unknown until the origin lookup has run.',
+        : 'The schema and the traffic disagree, but the schema does not reject these events. Who reads the field is unknown until the origin lookup has run.',
   }
 }
 

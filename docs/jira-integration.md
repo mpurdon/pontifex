@@ -4,7 +4,7 @@ File a ticket for a producer bug from the place the bug is visible, routed to
 the team that owns the event source.
 
 The analysis panel already knows everything a ticket needs — what disagrees,
-how much traffic it affects, whether events are being rejected, and an
+how much traffic it affects, whether the schema rejects them, and an
 offending payload. What it lacked was a way to hand that to the team that can
 fix it without retyping any of it.
 
@@ -117,8 +117,8 @@ the registry, not only from a graded schema:
   lists what disagrees, or says there is no schema. Each problem files with
   the hit's environment and log group as context.
 
-Every ticket carries the two lines that decide its urgency: whether the bus
-is rejecting the events today, and — once the origin lookup has found
+Every ticket carries the two lines that decide its urgency: whether the
+registered schema rejects the events (they are delivered regardless), and — once the origin lookup has found
 consumers — how many of the consumer files found read the field, with those
 files and their CODEOWNERS listed under *Consumers that read this field*.
 An issue about a field nobody reads says so, which is the case for closing

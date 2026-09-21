@@ -40,6 +40,7 @@ function settings(overrides: Partial<Settings>): Settings {
       issueType: 'Bug',
       labels: [],
       routes: [],
+      ownerRoutes: [],
       fieldDefaults: {},
     },
     eventBusRepoPath: null,

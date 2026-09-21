@@ -332,7 +332,7 @@ export type Severity = 'error' | 'warning'
  * Sent by the validator rather than inferred from the message, so rewording a
  * sentence cannot silently remove the button that acts on it.
  */
-export type Fix = 'widenNullable'
+export type Fix = 'openapi30'
 
 export interface Finding {
   severity: Severity
@@ -402,9 +402,10 @@ export interface SimplifyPreview {
 }
 
 /** Result of rewriting `nullable: true` into the spelling Ajv honours. */
-export interface NullableRepair {
+/** A document rewritten into the spellings the registry stores. */
+export interface Openapi30Repair {
   content: unknown
-  /** JSON Pointers to the fields that were widened. */
+  /** JSON Pointers to the schema objects that were rewritten. */
   changed: string[]
 }
 
@@ -526,7 +527,7 @@ export interface Impact {
  *
  * Merges what used to be two overlapping lists — validation failures and drift
  * — so a single problem is a single row. `rejects` is the difference between
- * "events are being thrown away" and "the schema is merely out of date".
+ * "the schema rejects these events" and "the schema is merely out of date".
  */
 export interface Issue {
   /** Stable across runs, so the same problem is recognisable in a later one. */
@@ -543,7 +544,10 @@ export interface Issue {
   observed: string | null
   affected: number
   sampled: number
-  /** Whether validation rejects these events today. */
+  /**
+   * Whether the registered schema rejects these events. Not whether they are
+   * lost: EventBridge delivers regardless, and the bus's validator only alerts.
+   */
   rejects: boolean
   example: unknown | null
   /** The validator's own message, when one applies. */

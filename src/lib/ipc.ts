@@ -44,7 +44,7 @@ import type {
   SchemaVersionSummary,
   Settings,
   TimeZone,
-  NullableRepair,
+  Openapi30Repair,
   SimplifyPreview,
   SsoAccount,
   SsoSessionStatus,
@@ -323,8 +323,8 @@ export const simplifySchema = (content: unknown) =>
  * The repair for the validator's `nullable` finding: Ajv has no `nullable`, so
  * those fields reject `null` on the bus today.
  */
-export const widenNullableSchema = (content: unknown) =>
-  invoke<NullableRepair>('widen_nullable_schema', { content })
+export const openapi30Schema = (content: unknown) =>
+  invoke<Openapi30Repair>('openapi_30_schema', { content })
 
 export const planImport = (
   directory: string,

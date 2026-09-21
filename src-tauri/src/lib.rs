@@ -285,7 +285,7 @@ pub fn run() {
             commands::schemas::delete_schema,
             commands::schemas::new_schema_draft,
             commands::schemas::simplify_schema,
-            commands::schemas::widen_nullable_schema,
+            commands::schemas::openapi_30_schema,
             commands::schemas::plan_import,
             commands::schemas::apply_import,
             commands::schemas::export_schemas,

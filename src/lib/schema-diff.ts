@@ -59,17 +59,11 @@ export function describeChange(draft: SchemaNode, baseline: SchemaNode): string[
   if (draft.required !== baseline.required) {
     notes.push(draft.required ? 'became required' : 'became optional')
   }
-  // Null *acceptance* is the fact worth reporting; `nullable: true` is a
-  // keyword the bus ignores, so gaining or losing it changes no verdict.
+  // Null *acceptance* is the fact worth reporting, whichever spelling
+  // carries it: `nullable: true` and a `null` type both count, as they do
+  // for the bus's validator.
   if (draft.acceptsNull !== baseline.acceptsNull) {
     notes.push(draft.acceptsNull ? 'now accepts null' : 'no longer accepts null')
-  }
-  if (draft.nullable !== baseline.nullable) {
-    notes.push(
-      draft.nullable
-        ? 'gained `nullable`, which the validator ignores'
-        : 'dropped the ignored `nullable` keyword',
-    )
   }
   if (draft.refTarget !== baseline.refTarget) {
     notes.push(`type ref ${or(baseline.refTarget)} → ${or(draft.refTarget)}`)

@@ -1,31 +1,39 @@
 //! Reading an OpenAPI 3.0 schema document as the JSON Schema the bus compiles.
 //!
-//! The two are close but not identical, and this module used to paper over the
-//! difference: `nullable: true` was rewritten to `type: [T, "null"]` before
-//! validation, on the reasoning that the registry uses `nullable` 560 times and
-//! flagging all of them would drown the reality check.
+//! The two are close but not identical, and the registry and the bus each
+//! enforce their own side of the difference:
 //!
-//! That was the wrong call, and it made pontifex lie in the direction that costs
-//! the most. `nullable` is an OpenAPI keyword; Ajv has no implementation of it,
-//! so under `strict: 'log'` the bus logs it once and ignores it forever. A
-//! field declared `{"type": "string", "nullable": true}` therefore **rejects
-//! `null` at the bus** while pontifex called it fine. Those 560 uses are not a
-//! reason to suppress the finding — they are the size of the problem.
+//! - **The registry** stores the document as OpenAPI 3.0 and validates it as
+//!   such on every write. A Schema Object there has one `type`, never a list
+//!   and never `null`; "or null" is spelled `nullable: true`. A document with
+//!   `type: ["string", "null"]` is refused with `BadRequestException: Content
+//!   is not valid OpenAPI 3.0`, and the message names only the component, not
+//!   the field. [`to_openapi_30`] rewrites the JSON Schema spellings into the
+//!   OpenAPI ones, and `validate` reports what it cannot.
+//! - **The bus** compiles with Ajv 8, which honours `nullable` (its docs:
+//!   "the nullable keyword is supported by default"): `{"type": "string",
+//!   "nullable": true}` accepts `null`, exactly as `["string", "null"]` would.
+//!   The Rust validator here does not know the keyword, so [`widen_nullable`]
+//!   rewrites it into the draft-07 spelling before anything is graded — on the
+//!   validation path only, never into a document.
 //!
-//! So the conversion no longer happens on the validation path. What is left is
-//! [`widen_nullable`], the same rewrite offered as a *repair*: it produces the
-//! `type: [T, "null"]` spelling that draft-07 genuinely honours, so a schema
-//! that means to accept nulls can be made to actually accept them.
+//! This module used to hold the opposite position — that Ajv ignored
+//! `nullable` and the type list was the only spelling that worked — and wrote
+//! type lists into drafts, which the registry then refused to save. The
+//! correction is verified against the bus's own Ajv configuration.
 
 use serde_json::{json, Map, Value};
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
-/// Rewrite `nullable` into the JSON Schema spelling the bus honours.
+/// Rewrite `nullable` into the JSON Schema spelling the Rust validator knows,
+/// so it grades the way Ajv does.
 ///
 /// - `nullable: true` alongside `type: T` becomes `type: [T, "null"]`
 /// - `nullable: true` alongside `enum` gains an explicit `null` member
 /// - `nullable` itself is dropped, since JSON Schema has no such keyword
+///
+/// For the validator only: a document written this way cannot be saved.
 ///
 /// This is a document repair, not a validation step — see the module note. It
 /// is what [`crate::schema::validate`]'s `nullable` finding is telling you to
@@ -208,18 +216,135 @@ fn walk_schema(
     pointer.truncate(base);
 }
 
-/// Every JSON Pointer in `document` at which `nullable: true` appears.
+/// Keywords an OpenAPI 3.0 Schema Object may carry. Anything else — bar
+/// `x-` extensions — fails the registry's validation of the document.
+pub const OPENAPI_30_KEYWORDS: [&str; 36] = [
+    "$ref",
+    "title",
+    "multipleOf",
+    "maximum",
+    "exclusiveMaximum",
+    "minimum",
+    "exclusiveMinimum",
+    "maxLength",
+    "minLength",
+    "pattern",
+    "maxItems",
+    "minItems",
+    "uniqueItems",
+    "maxProperties",
+    "minProperties",
+    "required",
+    "enum",
+    "type",
+    "allOf",
+    "oneOf",
+    "anyOf",
+    "not",
+    "items",
+    "properties",
+    "additionalProperties",
+    "description",
+    "format",
+    "default",
+    "nullable",
+    "discriminator",
+    "readOnly",
+    "writeOnly",
+    "xml",
+    "externalDocs",
+    "example",
+    "deprecated",
+];
+
+/// Whether a keyword may appear in an OpenAPI 3.0 Schema Object.
+pub fn is_openapi_30_keyword(keyword: &str) -> bool {
+    keyword.starts_with("x-") || OPENAPI_30_KEYWORDS.contains(&keyword)
+}
+
+/// Rewrite the JSON Schema spellings the registry refuses into the OpenAPI
+/// 3.0 ones it stores, and say where.
 ///
-/// The bus ignores all of them, so this is the list of places a `null` would be
-/// rejected in production despite the schema appearing to allow it.
-pub fn nullable_sites(document: &Value) -> Vec<String> {
-    let mut out = Vec::new();
+/// - `type: [T, "null"]` becomes `type: T, nullable: true`
+/// - `type: [T, U, …]` becomes `anyOf: [{type: T}, {type: U}, …]`, with
+///   `nullable: true` when `null` was among them
+/// - `type: "null"` becomes `nullable: true` with no `type` — nothing in
+///   OpenAPI 3.0 asserts a value is always null
+/// - `const: v` becomes `enum: [v]`; `examples: [v, …]` becomes `example: v`
+/// - `$schema`, `$id`, `id` and `$comment` are dropped
+///
+/// Everything else the registry would refuse — a tuple `items`, a keyword
+/// OpenAPI 3.0 does not have — is left for `validate` to name, since there is
+/// no rewrite that keeps its meaning.
+pub fn to_openapi_30(document: &Value) -> (Value, Vec<String>) {
+    let mut sites = Vec::new();
     walk_schemas(document, &mut |pointer, map| {
-        if map.get("nullable").and_then(Value::as_bool) == Some(true) {
-            out.push(pointer.to_string());
+        if needs_openapi_30(map) {
+            sites.push(pointer.to_string());
         }
     });
-    out
+
+    let mut out = document.clone();
+    for pointer in &sites {
+        if let Some(map) = out.pointer_mut(pointer).and_then(Value::as_object_mut) {
+            openapi_30_node(map);
+        }
+    }
+    (out, sites)
+}
+
+fn needs_openapi_30(map: &Map<String, Value>) -> bool {
+    matches!(map.get("type"), Some(Value::Array(_)))
+        || map.get("type").and_then(Value::as_str) == Some("null")
+        || map.contains_key("const")
+        || map.contains_key("examples")
+        || ["$schema", "$id", "id", "$comment"]
+            .iter()
+            .any(|k| map.contains_key(*k))
+}
+
+fn openapi_30_node(map: &mut Map<String, Value>) {
+    for key in ["$schema", "$id", "id", "$comment"] {
+        map.remove(key);
+    }
+    if let Some(value) = map.remove("const") {
+        map.entry("enum").or_insert_with(|| json!([value]));
+    }
+    if let Some(Value::Array(examples)) = map.remove("examples") {
+        if let Some(first) = examples.into_iter().next() {
+            map.entry("example").or_insert(first);
+        }
+    }
+
+    let types: Vec<String> = match map.get("type") {
+        Some(Value::Array(list)) => list
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        Some(Value::String(t)) if t == "null" => vec!["null".into()],
+        _ => return,
+    };
+    let nullable = types.iter().any(|t| t == "null");
+    let named: Vec<&String> = types.iter().filter(|t| *t != "null").collect();
+    match named.as_slice() {
+        [] => {
+            map.remove("type");
+        }
+        [single] => {
+            map.insert("type".into(), Value::String((*single).clone()));
+        }
+        many => {
+            map.remove("type");
+            map.insert(
+                "anyOf".into(),
+                Value::Array(many.iter().map(|t| json!({ "type": t })).collect()),
+            );
+        }
+    }
+    if nullable {
+        map.insert("nullable".into(), Value::Bool(true));
+    }
 }
 
 /// Build a standalone JSON Schema that validates against one named type.
@@ -227,10 +352,10 @@ pub fn nullable_sites(document: &Value) -> Vec<String> {
 /// The whole document rides along so internal `$ref`s resolve; the root is just
 /// a pointer at the type of interest.
 ///
-/// The document is passed through **unaltered**. Anything OpenAPI-only in it —
-/// `nullable`, `discriminator`, `xml`, `example` — is a keyword draft-07 does
-/// not define, so both Ajv and this crate ignore it. Rewriting any of it here
-/// would grade events under a schema the bus never sees.
+/// The document is passed through unaltered here; `ajv::validator_for` applies
+/// [`widen_nullable`] before compiling, which is the one OpenAPI keyword Ajv
+/// honours. The rest — `discriminator`, `xml`, `example` — draft-07 does not
+/// define, so both Ajv and this crate ignore them.
 pub fn schema_for_type(document: &Value, type_name: &str) -> Value {
     let mut root = json!({ "$ref": ref_to(type_name) });
 
@@ -250,9 +375,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn type_lists_become_nullable_or_any_of() {
+        let (out, changed) = to_openapi_30(&json!({ "components": { "schemas": { "T": {
+            "type": "object",
+            "properties": {
+                "a": { "type": ["string", "null"], "maxLength": 3 },
+                "b": { "type": ["string", "integer"] },
+                "c": { "type": ["string", "integer", "null"] },
+                "d": { "type": "null" },
+                "e": { "type": "string" }
+            }
+        }}}}));
+        let props = &out["components"]["schemas"]["T"]["properties"];
+        assert_eq!(
+            props["a"],
+            json!({ "type": "string", "nullable": true, "maxLength": 3 })
+        );
+        assert_eq!(
+            props["b"],
+            json!({ "anyOf": [{ "type": "string" }, { "type": "integer" }] })
+        );
+        assert_eq!(
+            props["c"],
+            json!({ "anyOf": [{ "type": "string" }, { "type": "integer" }], "nullable": true })
+        );
+        assert_eq!(props["d"], json!({ "nullable": true }));
+        assert_eq!(props["e"], json!({ "type": "string" }));
+        assert_eq!(changed.len(), 4);
+        assert!(changed.contains(&"/components/schemas/T/properties/a".to_string()));
+    }
+
+    #[test]
+    fn draft_only_keywords_are_translated_or_dropped() {
+        let (out, _) = to_openapi_30(&json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "k": { "const": "x", "examples": ["x", "y"], "$comment": "c" }
+            }
+        }));
+        assert!(out.get("$schema").is_none());
+        assert_eq!(
+            out["properties"]["k"],
+            json!({ "enum": ["x"], "example": "x" })
+        );
+    }
+
+    #[test]
     fn widens_a_typed_nullable_field() {
         let input = json!({ "type": "string", "nullable": true });
-        assert_eq!(widen_nullable(&input), json!({ "type": ["string", "null"] }));
+        assert_eq!(
+            widen_nullable(&input),
+            json!({ "type": ["string", "null"] })
+        );
     }
 
     #[test]
@@ -316,11 +491,6 @@ mod tests {
             }}}
         });
 
-        assert_eq!(
-            nullable_sites(&document),
-            vec!["/components/schemas/Thing/properties/real"]
-        );
-
         let repaired = widen_nullable(&document);
         assert_eq!(
             repaired["components"]["schemas"]["Thing"]["example"],
@@ -338,36 +508,37 @@ mod tests {
         let document = json!({
             "components": { "schemas": { "Thing": {
                 "type": "object",
-                "properties": { "a/b": { "type": "string", "nullable": true } }
+                "properties": { "a/b": { "type": ["string", "null"] } }
             }}}
         });
-        let sites = nullable_sites(&document);
+        let (repaired, sites) = to_openapi_30(&document);
         assert_eq!(sites, vec!["/components/schemas/Thing/properties/a~1b"]);
         // And the pointer has to be the one `pointer_mut` accepts, or the
         // repair silently skips the field it just reported.
         assert_eq!(
-            widen_nullable(&document)["components"]["schemas"]["Thing"]["properties"]["a/b"],
-            json!({ "type": ["string", "null"] })
+            repaired["components"]["schemas"]["Thing"]["properties"]["a/b"],
+            json!({ "type": "string", "nullable": true })
         );
     }
 
     #[test]
-    fn nullable_sites_names_every_offender() {
+    fn the_openapi_rewrite_names_every_site_including_nested_ones() {
         let document = json!({
             "components": { "schemas": {
                 "Thing": {
                     "type": "object",
                     "properties": {
-                        "note": { "type": "string", "nullable": true },
-                        "tags": { "type": "array", "items": { "type": "string", "nullable": true } },
+                        "note": { "type": ["string", "null"] },
+                        "tags": { "type": "array", "items": { "type": ["string", "null"] } },
                         "id": { "type": "string" },
-                        "old": { "type": "string", "nullable": false }
+                        "fine": { "type": "string", "nullable": true }
                     }
                 }
             }}
         });
+        let (_, sites) = to_openapi_30(&document);
         assert_eq!(
-            nullable_sites(&document),
+            sites,
             vec![
                 "/components/schemas/Thing/properties/note",
                 "/components/schemas/Thing/properties/tags/items",

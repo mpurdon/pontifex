@@ -182,7 +182,7 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
     out.push_str(&format!("{}\n\n", plain(&issue.summary)));
 
     // A concern is a person's words, not a validator's finding: there is no
-    // count of affected events and nothing is being rejected.
+    // count of affected events and no verdict from the schema.
     let concern = issue.kind == IssueKind::Concern;
     out.push_str(if concern {
         "h3. Details\n"
@@ -217,9 +217,9 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
     // bus is throwing the events away, and who downstream reads the field.
     if !concern {
         out.push_str(if issue.rejects {
-            "* *These events are being rejected by schema validation today.*\n"
+            "* *The registered schema rejects these events.* EventBridge still delivers them; the bus's schema validator alerts on failures rather than blocking.\n"
         } else {
-            "* Not currently rejected — the schema is out of date, not blocking.\n"
+            "* The schema does not reject these events — it is out of date, not broken.\n"
         });
         if let Some(impact) = &issue.impact {
             out.push_str(&match (impact.readers.len(), impact.indirect.len()) {
@@ -512,14 +512,15 @@ mod tests {
     #[test]
     fn the_body_says_whether_events_are_being_thrown_away() {
         let rejecting = render_description(&issue(), &context());
-        assert!(rejecting.contains("being rejected by schema validation today"));
+        assert!(rejecting.contains("The registered schema rejects these events"));
+        assert!(rejecting.contains("still delivers"), "{rejecting}");
 
         let drifting = Issue {
             rejects: false,
             ..issue()
         };
         let body = render_description(&drifting, &context());
-        assert!(body.contains("not blocking"), "{body}");
+        assert!(body.contains("does not reject"), "{body}");
     }
 
     #[test]

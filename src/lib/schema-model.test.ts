@@ -138,7 +138,7 @@ describe('buildTree', () => {
     expect(find(tree, 'Sync/clientId')!.required).toBe(true)
     expect(find(tree, 'Sync/clientId')!.description).toBe('Client identifier')
     expect(find(tree, 'Sync/note')!.required).toBe(false)
-    expect(find(tree, 'Sync/note')!.nullable).toBe(true)
+    expect(find(tree, 'Sync/note')!.acceptsNull).toBe(true)
     expect(find(tree, 'Sync/metadata/publishedAt')!.format).toBe('date-time')
   })
 
@@ -198,28 +198,27 @@ describe('buildTree', () => {
     // now writes for every sometimes-null field.
     expect(node.type).toBe('string')
     expect(node.acceptsNull).toBe(true)
-    expect(node.nullable).toBe(false)
   })
 
-  it('separates a dead `nullable` from real null acceptance', () => {
+  it('reads `nullable: true` and a null type list as the same fact', () => {
     const both = {
       components: {
         schemas: {
           A: {
             type: 'object',
             properties: {
-              stale: { type: 'string', nullable: true },
-              real: { type: ['string', 'null'] },
+              spelled: { type: 'string', nullable: true },
+              listed: { type: ['string', 'null'] },
             },
           },
         },
       },
     }
     const tree = buildTree(both, 'A')!
-    // `nullable` alone does not accept null — the bus ignores the keyword.
-    expect(find(tree, 'A/stale')!.acceptsNull).toBe(false)
-    expect(find(tree, 'A/stale')!.nullable).toBe(true)
-    expect(find(tree, 'A/real')!.acceptsNull).toBe(true)
+    // The bus's Ajv honours `nullable`; the list is what a pasted JSON
+    // Schema says, and the registry will not store it.
+    expect(find(tree, 'A/spelled')!.acceptsNull).toBe(true)
+    expect(find(tree, 'A/listed')!.acceptsNull).toBe(true)
   })
 
   it('surfaces a constraint that does not apply to the declared type', () => {
@@ -608,15 +607,32 @@ describe('edits', () => {
     ).toEqual({ $ref: '#/components/schemas/Item' })
   })
 
-  it('replaces a dead `nullable` with a type the bus honours', () => {
+  it('writes `nullable: true`, the spelling the registry stores', () => {
     const next = setAcceptsNull(
       doc(),
-      '/components/schemas/Sync/properties/note',
+      '/components/schemas/Sync/properties/clientId',
       true,
     )
-    expect(getAtPointer(next, '/components/schemas/Sync/properties/note')).toEqual({
-      type: ['string', 'null'],
+    expect(getAtPointer(next, '/components/schemas/Sync/properties/clientId')).toEqual({
+      type: 'string',
+      nullable: true,
+      description: 'Client identifier',
     })
+  })
+
+  it('folds a pasted null type list into `nullable`', () => {
+    const listed = {
+      components: {
+        schemas: { A: { type: 'object', properties: { n: { type: ['string', 'null'] } } } },
+      },
+    }
+    const on = setAcceptsNull(listed, '/components/schemas/A/properties/n', true)
+    expect(getAtPointer(on, '/components/schemas/A/properties/n')).toEqual({
+      type: 'string',
+      nullable: true,
+    })
+    const off = setAcceptsNull(listed, '/components/schemas/A/properties/n', false)
+    expect(getAtPointer(off, '/components/schemas/A/properties/n')).toEqual({ type: 'string' })
   })
 
   it('narrows back to a plain type rather than leaving a one-element array', () => {
@@ -649,16 +665,15 @@ describe('edits', () => {
     })
   })
 
-  it('carries null acceptance across a type change, in the spelling Ajv honours', () => {
+  it('carries null acceptance across a type change', () => {
     const next = setNodeType(
       doc(),
       '/components/schemas/Sync/properties/note',
       'integer',
     )
-    // `note` is declared `nullable: true`. Retyping is not the moment to hand
-    // the field a keyword the bus ignores, so the intent moves to `type`.
     expect(getAtPointer(next, '/components/schemas/Sync/properties/note')).toEqual({
-      type: ['integer', 'null'],
+      type: 'integer',
+      nullable: true,
     })
   })
 

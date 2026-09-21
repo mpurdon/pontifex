@@ -15,7 +15,7 @@
 use crate::error::{Error, Result};
 use crate::schema::events;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 
 /// The edit that clears one issue, with everything it needs to apply itself.
 ///
@@ -42,8 +42,8 @@ pub enum Repair {
 /// Keywords that only describe an object, and mean nothing once it is not one.
 ///
 /// Left behind, they are not merely noise: `additionalProperties: false` beside
-/// `type: ["string","null"]` still rejects nothing, but the next reader has to
-/// work out which half of the declaration is live.
+/// `type: string, nullable: true` still rejects nothing, but the next reader
+/// has to work out which half of the declaration is live.
 const OBJECT_ONLY: [&str; 5] = [
     "properties",
     "additionalProperties",
@@ -110,7 +110,9 @@ fn property_mut<'a>(
         .and_then(Value::as_object_mut)
         .and_then(|properties| properties.get_mut(leaf))
         .ok_or_else(|| {
-            Error::Invalid(format!("`{path}` is not declared, so there is nothing to change"))
+            Error::Invalid(format!(
+                "`{path}` is not declared, so there is nothing to change"
+            ))
         })?;
 
     // A `$ref` names a type shared with every other field pointing at it.
@@ -126,7 +128,9 @@ fn property_mut<'a>(
     // Rendered before the mutable borrow, so the message can name what it found.
     let rendered = property.to_string();
     property.as_object_mut().ok_or_else(|| {
-        Error::Invalid(format!("`{path}` is declared as {rendered}, which is not an object"))
+        Error::Invalid(format!(
+            "`{path}` is declared as {rendered}, which is not an object"
+        ))
     })
 }
 
@@ -146,13 +150,7 @@ fn widen_type(
 
     let property = property_mut(document, pointer, leaf, path)?;
 
-    property.insert("type".into(), type_value(types));
-
-    // `nullable: true` is the OpenAPI spelling Ajv does not honour, which is
-    // the whole reason these events are being rejected. Having just written
-    // "null" into the type, leaving it behind would state the same intent twice
-    // in two dialects, one of which does nothing.
-    property.remove("nullable");
+    declare_types(property, types);
 
     if !types.iter().any(|t| t == "object") {
         for keyword in OBJECT_ONLY {
@@ -226,12 +224,7 @@ fn drop_required(document: &mut Value, pointer: &str, leaf: &str, path: &str) ->
 }
 
 /// Declare a field the schema does not describe.
-fn declare_field(
-    document: &mut Value,
-    pointer: &str,
-    leaf: &str,
-    types: &[String],
-) -> Result<()> {
+fn declare_field(document: &mut Value, pointer: &str, leaf: &str, types: &[String]) -> Result<()> {
     let owner = document
         .pointer_mut(pointer)
         .and_then(Value::as_object_mut)
@@ -245,7 +238,7 @@ fn declare_field(
 
     let mut declaration = Map::new();
     if !types.is_empty() {
-        declaration.insert("type".into(), type_value(types));
+        declare_types(&mut declaration, types);
         // An observed object conveys nothing about its inner shape, so leave it
         // open rather than inventing one. Same choice `declaration_for` makes.
         if types.iter().any(|t| t == "object") {
@@ -257,14 +250,33 @@ fn declare_field(
     Ok(())
 }
 
-/// `"string"` for one type, `["string","null"]` for several.
+/// Write a set of JSON types onto a schema object in OpenAPI 3.0's spelling,
+/// which is what the registry stores and what the bus's Ajv honours.
 ///
-/// Draft-07 accepts both, and the scalar form is what a hand-written schema
-/// looks like — a repair should not be legible as one only by its punctuation.
-fn type_value(types: &[String]) -> Value {
-    match types {
-        [single] => Value::String(single.clone()),
-        many => Value::Array(many.iter().map(|t| Value::String(t.clone())).collect()),
+/// One type is `type: T`; "or null" is `nullable: true`; a genuine union is
+/// `anyOf` of single types, since OpenAPI 3.0 has no type list. Whatever
+/// spelling was there before — a list, a stale `nullable` — is replaced.
+pub(crate) fn declare_types(schema: &mut Map<String, Value>, types: &[String]) {
+    let nullable = types.iter().any(|t| t == "null");
+    let named: Vec<&String> = types.iter().filter(|t| *t != "null").collect();
+    schema.remove("type");
+    schema.remove("anyOf");
+    match named.as_slice() {
+        [] => {}
+        [single] => {
+            schema.insert("type".into(), Value::String((*single).clone()));
+        }
+        many => {
+            schema.insert(
+                "anyOf".into(),
+                Value::Array(many.iter().map(|t| json!({ "type": t })).collect()),
+            );
+        }
+    }
+    if nullable {
+        schema.insert("nullable".into(), Value::Bool(true));
+    } else {
+        schema.remove("nullable");
     }
 }
 
@@ -311,10 +323,25 @@ mod tests {
         };
         let next = apply_to(&document(), "country", &repair).unwrap();
 
+        let country = property(&next, "/components/schemas/Event/properties/country");
+        assert_eq!(country["type"], json!("string"));
+        assert_eq!(country["nullable"], json!(true));
+    }
+
+    #[test]
+    fn a_genuine_union_is_written_as_any_of() {
+        // OpenAPI 3.0 has no type list; the registry refuses one.
+        let repair = Repair::WidenType {
+            types: vec!["string".into(), "integer".into(), "null".into()],
+        };
+        let next = apply_to(&document(), "id", &repair).unwrap();
+        let id = property(&next, "/components/schemas/Event/properties/id");
+        assert!(id.get("type").is_none());
         assert_eq!(
-            property(&next, "/components/schemas/Event/properties/country/type"),
-            &json!(["string", "null"])
+            id["anyOf"],
+            json!([{ "type": "string" }, { "type": "integer" }])
         );
+        assert_eq!(id["nullable"], json!(true));
     }
 
     #[test]
@@ -330,7 +357,7 @@ mod tests {
         assert_eq!(country.get("type"), Some(&json!("string")));
         assert!(country.get("properties").is_none());
         assert!(country.get("additionalProperties").is_none());
-        // Written into `type` now, and only there.
+        // Observed as a string only, so the old `nullable` goes too.
         assert!(country.get("nullable").is_none());
     }
 
@@ -428,9 +455,11 @@ mod tests {
             &json!(["id"])
         );
         // Still declared, still an enum — only no longer mandatory.
-        assert!(property(&next, "/components/schemas/Event/properties/status")
-            .get("enum")
-            .is_some());
+        assert!(
+            property(&next, "/components/schemas/Event/properties/status")
+                .get("enum")
+                .is_some()
+        );
     }
 
     #[test]
@@ -449,7 +478,10 @@ mod tests {
     #[test]
     fn dropping_required_on_an_optional_field_says_so() {
         let error = apply_to(&document(), "country", &Repair::DropRequired).unwrap_err();
-        assert!(error.to_string().contains("already optional"), "got: {error}");
+        assert!(
+            error.to_string().contains("already optional"),
+            "got: {error}"
+        );
     }
 
     #[test]
@@ -461,8 +493,8 @@ mod tests {
         let next = apply_to(&document(), "ringbaId", &repair).unwrap();
 
         assert_eq!(
-            property(&next, "/components/schemas/Event/properties/ringbaId/type"),
-            &json!(["string", "null"])
+            property(&next, "/components/schemas/Event/properties/ringbaId"),
+            &json!({ "type": "string", "nullable": true })
         );
     }
 
@@ -495,7 +527,10 @@ mod tests {
             types: vec!["string".into()],
         };
         let error = apply_to(&document(), "tags[]", &repair).unwrap_err();
-        assert!(error.to_string().contains("edit it by hand"), "got: {error}");
+        assert!(
+            error.to_string().contains("edit it by hand"),
+            "got: {error}"
+        );
     }
 
     #[test]

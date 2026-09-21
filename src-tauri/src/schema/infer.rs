@@ -9,14 +9,12 @@
 //! `additionalProperties: true`, and only ID-like fields marked required (see
 //! `simplify.rs`, ported from the repo's `simplifySchemas.js`).
 //!
-//! One convention it deliberately does *not* follow: a sometimes-null field is
-//! declared `type: [T, "null"]`, not `nullable: true`. Much of the registry
-//! uses `nullable`, but Ajv has no implementation of it, so a draft written
-//! that way would reject the very events it was inferred from. See
-//! `openapi::widen_nullable`.
+//! A sometimes-null field is declared `type: T, nullable: true`: the OpenAPI
+//! 3.0 spelling the registry stores, which the bus's Ajv honours. (`type:
+//! [T, "null"]` means the same and cannot be saved.)
 
 use crate::schema::simplify::is_id_field;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 fn json_type(value: &Value) -> &'static str {
@@ -94,8 +92,7 @@ fn infer_position(values: &[&Value]) -> Value {
         // Only ever null. `type: ["null"]` would be a real constraint asserting
         // the field is *always* null, which the sample does not support — an
         // untyped schema accepts null and everything else, which is the honest
-        // reading. The old `nullable: true` here constrained nothing either way,
-        // since the bus ignores it.
+        // reading.
         return Value::Object(schema);
     }
 
@@ -119,24 +116,19 @@ fn infer_position(values: &[&Value]) -> Value {
     }
 
     let ty = types[0];
-    // Declared up front, including the `null` branch, because a `type` added
-    // after the fact is the bug this replaced: the widened form has to be the
-    // one that lands in the document.
-    schema.insert(
-        "type".into(),
-        if saw_null {
-            json!([ty, "null"])
-        } else {
-            Value::String(ty.to_string())
-        },
-    );
+    schema.insert("type".into(), Value::String(ty.to_string()));
+    if saw_null {
+        schema.insert("nullable".into(), Value::Bool(true));
+    }
 
     match ty {
         "object" => {
             let total = non_null.len();
             let mut fields: BTreeMap<String, (Vec<&Value>, usize)> = BTreeMap::new();
             for value in &non_null {
-                let Some(map) = value.as_object() else { continue };
+                let Some(map) = value.as_object() else {
+                    continue;
+                };
                 for (key, child) in map {
                     let entry = fields.entry(key.clone()).or_insert((Vec::new(), 0));
                     entry.0.push(child);
@@ -172,8 +164,7 @@ fn infer_position(values: &[&Value]) -> Value {
             schema.insert("items".into(), infer_position(&elements));
         }
         "string" => {
-            if let Some(format) = detect_format(&non_null.iter().map(|v| **v).collect::<Vec<_>>())
-            {
+            if let Some(format) = detect_format(&non_null.iter().map(|v| **v).collect::<Vec<_>>()) {
                 schema.insert("format".into(), Value::String(format.to_string()));
             }
         }
@@ -241,13 +232,11 @@ mod tests {
     }
 
     #[test]
-    fn a_sometimes_null_field_is_typed_so_the_bus_accepts_the_null() {
+    fn a_sometimes_null_field_is_nullable_in_the_registrys_spelling() {
         let payloads = vec![json!({ "note": "x" }), json!({ "note": null })];
         let note = &infer_payload_schema(&payloads)["properties"]["note"];
-        // Not `nullable: true` — Ajv ignores that, so a draft written that way
-        // would reject the `null` in the very sample it was inferred from.
-        assert_eq!(note["type"], json!(["string", "null"]));
-        assert!(note.get("nullable").is_none());
+        assert_eq!(note["type"], json!("string"));
+        assert_eq!(note["nullable"], json!(true));
     }
 
     #[test]
@@ -371,6 +360,10 @@ mod tests {
         let document = document_with_detail(&identity, infer_payload_schema(&payloads));
 
         let report = validate::validate(&document, Some("my-service@thing-happened"));
-        assert!(report.valid, "inferred schema must validate: {:?}", report.findings);
+        assert!(
+            report.valid,
+            "inferred schema must validate: {:?}",
+            report.findings
+        );
     }
 }

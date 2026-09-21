@@ -367,10 +367,10 @@ export function Inspector({
             label="Required"
           />
         )}
-        {/* Writes `type: [T, "null"]`, not `nullable: true` — see the warning
-            below for why the two are not interchangeable. Disabled where there
-            is no type to widen: an untyped field already accepts null, and a
-            `$ref`'s nullability belongs to the type it points at. */}
+        {/* Writes `nullable: true`, the spelling the registry stores and the
+            bus honours. Disabled where there is no type to qualify: an untyped
+            field already accepts null, and a `$ref`'s nullability belongs to
+            the type it points at. */}
         <Checkbox
           checked={node.acceptsNull}
           disabled={effectiveType === 'ref' || effectiveType === 'unknown'}
@@ -379,24 +379,6 @@ export function Inspector({
         />
       </div>
 
-      {node.nullable && (
-        <div className="flex items-start gap-1.5 rounded-md border border-warn/30 bg-warn/10 px-2 py-1.5 text-[10px] text-warn">
-          <AlertTriangle className="mt-px size-3 shrink-0" />
-          <span>
-            This field is marked <code className="font-mono">nullable: true</code>, which
-            does nothing. It is an OpenAPI keyword and the bus validates with Ajv, which
-            ignores it — so nulls are rejected today.{' '}
-            <button
-              type="button"
-              className="underline"
-              onClick={() => onSetAcceptsNull(node, true)}
-            >
-              Rewrite it as “accepts null”
-            </button>
-            {node.acceptsNull ? ' to drop the dead keyword.' : ' to make that true.'}
-          </span>
-        </div>
-      )}
 
       {/* `node.type` is the *resolved* type, so this also appears for a field
           that reaches an object through a $ref. */}

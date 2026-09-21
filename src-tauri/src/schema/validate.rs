@@ -23,10 +23,10 @@ pub enum Severity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Fix {
-    /// Rewrite every `nullable: true` as `type: [T, "null"]` —
-    /// [`crate::schema::openapi::widen_nullable`], exposed as the
-    /// `widen_nullable_schema` command.
-    WidenNullable,
+    /// Rewrite the JSON Schema spellings the registry refuses into OpenAPI
+    /// 3.0 — [`crate::schema::openapi::to_openapi_30`], exposed as the
+    /// `openapi_30_schema` command.
+    Openapi30,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,7 +110,10 @@ pub fn validate(content: &Value, expected_name: Option<&str>) -> ValidationRepor
     }
 
     if doc.get("openapi").and_then(Value::as_str).is_none() {
-        findings.push(warning("/openapi", "Missing `openapi` version string (expected \"3.0.0\")"));
+        findings.push(warning(
+            "/openapi",
+            "Missing `openapi` version string (expected \"3.0.0\")",
+        ));
     }
 
     let Some(schemas) = openapi::component_schemas(&doc) else {
@@ -133,6 +136,7 @@ pub fn validate(content: &Value, expected_name: Option<&str>) -> ValidationRepor
     check_detail_ref(envelope, schemas, &mut findings);
     check_component_schemas(schemas, &mut findings);
     check_ajv_parity(&doc, &mut findings);
+    check_openapi_30(&doc, &mut findings);
     check_registry_name(expected_name, &mut findings);
 
     ValidationReport::from(findings, identity)
@@ -160,6 +164,137 @@ fn check_ajv_parity(document: &Value, findings: &mut Vec<Finding>) {
     openapi::walk_schemas(document, &mut |pointer, map| parity.visit(pointer, map));
 
     parity.report(findings);
+}
+
+/// Report what the registry will refuse to store.
+///
+/// The registry validates every write as OpenAPI 3.0 and answers a violation
+/// with `Content is not valid OpenAPI 3.0: 'components/schemas/X' oneOf
+/// failed` — the component, never the field or the keyword. These are the
+/// same checks, made before the write, naming the pointer. Every one is an
+/// error: the document cannot be saved as it stands.
+fn check_openapi_30(document: &Value, findings: &mut Vec<Finding>) {
+    let mut type_lists = Sites::default();
+    let mut null_types = Sites::default();
+    let mut tuple_items = Sites::default();
+    let mut numeric_exclusives = Sites::default();
+    let mut translatable: BTreeMap<&'static str, Sites> = BTreeMap::new();
+    let mut unknown: BTreeMap<String, Sites> = BTreeMap::new();
+
+    openapi::walk_schemas(document, &mut |pointer, map| {
+        match map.get("type") {
+            Some(Value::Array(_)) => type_lists.add(pointer),
+            Some(Value::String(t)) if t == "null" => null_types.add(pointer),
+            _ => {}
+        }
+        if matches!(map.get("items"), Some(Value::Array(_))) {
+            tuple_items.add(&format!("{pointer}/items"));
+        }
+        for keyword in ["exclusiveMinimum", "exclusiveMaximum"] {
+            if map.get(keyword).is_some_and(Value::is_number) {
+                numeric_exclusives.add(&format!("{pointer}/{keyword}"));
+            }
+        }
+        for key in map.keys() {
+            if openapi::is_openapi_30_keyword(key) {
+                continue;
+            }
+            // A foreign dialect is already an error from the parity pass,
+            // and one that says the registry refuses it too.
+            if key == "$schema"
+                && map
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !ajv::is_draft_07(id))
+            {
+                continue;
+            }
+            match key.as_str() {
+                k @ ("const" | "examples" | "$schema" | "$id" | "id" | "$comment") => {
+                    let k: &'static str = match k {
+                        "const" => "const",
+                        "examples" => "examples",
+                        "$schema" => "$schema",
+                        "$id" => "$id",
+                        "id" => "id",
+                        _ => "$comment",
+                    };
+                    translatable
+                        .entry(k)
+                        .or_default()
+                        .add(&format!("{pointer}/{k}"));
+                }
+                other => unknown
+                    .entry(other.to_string())
+                    .or_default()
+                    .add(&format!("{pointer}/{other}")),
+            }
+        }
+    });
+
+    aggregate(
+        findings,
+        Severity::Error,
+        &type_lists,
+        Some(Fix::Openapi30),
+        "`type` is a list, which the registry refuses: an OpenAPI 3.0 schema has one \
+         `type`. Spell \"or null\" as `nullable: true` — the bus honours it — and a \
+         genuine union as `anyOf`.",
+    );
+    aggregate(
+        findings,
+        Severity::Error,
+        &null_types,
+        Some(Fix::Openapi30),
+        "`type: \"null\"` is not an OpenAPI 3.0 type, and the registry refuses it. Use \
+         `nullable: true`, with or without another `type`.",
+    );
+    aggregate(
+        findings,
+        Severity::Error,
+        &tuple_items,
+        None,
+        "`items` is a list, which OpenAPI 3.0 does not allow — `items` describes every \
+         element with one schema. The registry refuses this document.",
+    );
+    aggregate(
+        findings,
+        Severity::Error,
+        &numeric_exclusives,
+        None,
+        "`exclusiveMinimum`/`exclusiveMaximum` are booleans in OpenAPI 3.0, so the \
+         registry refuses a number here — and Ajv refuses the boolean. No spelling \
+         satisfies both; use `minimum`/`maximum`.",
+    );
+    for (keyword, sites) in &translatable {
+        let note = match *keyword {
+            "const" => "spell it `enum` with one value",
+            "examples" => "OpenAPI 3.0 has `example`, singular",
+            _ => "drop it; the document's identity is its registry name",
+        };
+        aggregate(
+            findings,
+            Severity::Error,
+            sites,
+            Some(Fix::Openapi30),
+            &format!(
+                "`{keyword}` is not an OpenAPI 3.0 keyword, and the registry refuses a \
+                 document that carries it — {note}."
+            ),
+        );
+    }
+    for (keyword, sites) in &unknown {
+        aggregate(
+            findings,
+            Severity::Error,
+            sites,
+            None,
+            &format!(
+                "`{keyword}` is not an OpenAPI 3.0 keyword, and the registry refuses a \
+                 document that carries it. Only `x-` extensions may be added."
+            ),
+        );
+    }
 }
 
 /// How many offending paths to name before summarising.
@@ -217,7 +352,8 @@ impl Sites {
 /// hundreds of kilobytes, on a path that re-runs while you type.
 #[derive(Default)]
 struct Parity {
-    nullable: Sites,
+    /// `nullable` with no `type`: Ajv refuses to compile it.
+    untyped_nullable: Sites,
     dialect: Sites,
     /// Keyed by the post-draft-07 keyword that was found.
     post_07: BTreeMap<&'static str, Sites>,
@@ -247,8 +383,10 @@ impl Parity {
     fn visit(&mut self, pointer: &str, map: &serde_json::Map<String, Value>) {
         self.check_dialect(pointer, map);
 
-        if map.get("nullable").and_then(Value::as_bool) == Some(true) {
-            self.nullable.add(pointer);
+        // Ajv: '"nullable" cannot be used without "type"' — a compile error,
+        // which would take the whole type down with it.
+        if map.contains_key("nullable") && !map.contains_key("type") {
+            self.untyped_nullable.add(pointer);
         }
 
         for (keyword, _) in POST_DRAFT_07 {
@@ -276,8 +414,7 @@ impl Parity {
         // the schema rather than as the old meaning.
         for keyword in ["exclusiveMinimum", "exclusiveMaximum"] {
             if map.get(keyword).is_some_and(Value::is_boolean) {
-                self.boolean_exclusives
-                    .add(&format!("{pointer}/{keyword}"));
+                self.boolean_exclusives.add(&format!("{pointer}/{keyword}"));
             }
         }
 
@@ -306,18 +443,13 @@ impl Parity {
     fn report(self, findings: &mut Vec<Finding>) {
         aggregate(
             findings,
-            Severity::Warning,
-            &self.nullable,
-            Some(Fix::WidenNullable),
-            &format!(
-                "`nullable: true` does not allow nulls at runtime. It is an OpenAPI keyword; \
-                 the bus validates with Ajv, which has no implementation of it and ignores it \
-                 entirely — so a field declared `nullable` still rejects `null`. Use \
-                 `\"type\": [\"<type>\", \"null\"]`, which draft-07 does honour. \
-                 {count} {plural} affected:",
-                count = self.nullable.count,
-                plural = if self.nullable.count == 1 { "field is" } else { "fields are" },
-            ),
+            Severity::Error,
+            &self.untyped_nullable,
+            None,
+            "`nullable` without a `type` is a schema Ajv refuses to compile (\"nullable\" \
+             cannot be used without \"type\"), so nothing of this type would be graded. \
+             Give the field a `type`, or drop `nullable` — an untyped field already \
+             accepts null.",
         );
 
         aggregate(
@@ -327,7 +459,7 @@ impl Parity {
             None,
             "`$schema` names a dialect the bus cannot load. It compiles with Ajv's draft-07 \
              meta-schema and would throw on load, so no event of this type would ever be \
-             graded. Remove `$schema`, or set it to draft-07.",
+             graded. Remove it — the registry refuses `$schema` in any case.",
         );
 
         for (keyword, note) in POST_DRAFT_07 {
@@ -437,7 +569,13 @@ fn check_registry_name(expected_name: Option<&str>, findings: &mut Vec<Finding>)
 
     let rendered: Vec<String> = bad
         .iter()
-        .map(|c| if *c == ' ' { "space".to_string() } else { format!("'{c}'") })
+        .map(|c| {
+            if *c == ' ' {
+                "space".to_string()
+            } else {
+                format!("'{c}'")
+            }
+        })
         .collect();
 
     findings.push(Finding {
@@ -462,7 +600,10 @@ fn check_envelope(
     const BASE: &str = "/components/schemas/AWSEvent";
 
     if envelope.get("type").and_then(Value::as_str) != Some("object") {
-        findings.push(error(&format!("{BASE}/type"), "`AWSEvent` must have type \"object\""));
+        findings.push(error(
+            &format!("{BASE}/type"),
+            "`AWSEvent` must have type \"object\"",
+        ));
     }
 
     // Required-field coverage.
@@ -486,7 +627,9 @@ fn check_envelope(
         ));
     }
 
-    let source = envelope.get("x-amazon-events-source").and_then(Value::as_str);
+    let source = envelope
+        .get("x-amazon-events-source")
+        .and_then(Value::as_str);
     let detail_type = envelope
         .get("x-amazon-events-detail-type")
         .and_then(Value::as_str);
@@ -532,8 +675,8 @@ fn check_envelope(
             // EventBridge forbids in a schema name, so it was sanitized to get
             // the write accepted. Not a contradiction — but not free either,
             // see the message.
-            let sanitized_naming =
-                !discovery_naming && expected == crate::schema::model::sanitize_schema_name(&declared);
+            let sanitized_naming = !discovery_naming
+                && expected == crate::schema::model::sanitize_schema_name(&declared);
 
             let severity = if discovery_naming || sanitized_naming {
                 Severity::Warning
@@ -650,10 +793,7 @@ fn check_detail_ref(
 /// Compiled the way the bus compiles — draft-07, `ajv-formats` — so "this does
 /// not compile" means the same thing in both places. Under 2020-12 a document
 /// could compile here and throw there.
-fn check_component_schemas(
-    schemas: &serde_json::Map<String, Value>,
-    findings: &mut Vec<Finding>,
-) {
+fn check_component_schemas(schemas: &serde_json::Map<String, Value>, findings: &mut Vec<Finding>) {
     for (name, schema) in schemas {
         // `$ref`s are document-relative and the validator would try to fetch
         // them, so validate a copy with the refs stripped to their targets.
@@ -773,7 +913,10 @@ mod tests {
             .find(|f| f.message.contains("EventBridge will reject the name"))
             .expect("expected a name finding");
         assert_eq!(finding.severity, super::Severity::Error);
-        assert!(finding.message.contains("space"), "should name the character");
+        assert!(
+            finding.message.contains("space"),
+            "should name the character"
+        );
         assert!(
             finding.message.contains("Atomic-Forms@CASE_STATUS_CHANGED"),
             "should offer a registrable alternative: {}",
@@ -792,7 +935,10 @@ mod tests {
         );
         let report = super::validate(&doc, Some("orders-api@order-assigned"));
         assert!(
-            !report.findings.iter().any(|f| f.message.contains("EventBridge will reject")),
+            !report
+                .findings
+                .iter()
+                .any(|f| f.message.contains("EventBridge will reject")),
             "valid names must not be flagged"
         );
     }
@@ -942,73 +1088,81 @@ mod tests {
     }
 
     #[test]
-    fn nullable_is_reported_with_the_fix_and_does_not_block_a_save() {
+    fn nullable_is_the_registry_spelling_and_raises_nothing() {
         let doc = with_payload_field(json!({ "type": "string", "nullable": true }));
         let report = validate(&doc, None);
-
-        // A warning, not an error: the document is legal and registrable, and
-        // most of the registry is written this way. Blocking would make pontifex
-        // unable to open the schemas it exists to manage.
         assert!(report.valid, "findings: {:?}", report.findings);
-        let message = message_matching(&report, "nullable").expect("a nullable finding");
-        assert!(message.contains("Ajv"), "{message}");
-        assert!(message.contains(r#"["<type>", "null"]"#), "{message}");
-        assert!(message.contains("`/components/schemas/ThingHappened/properties/veteranId`"));
+        assert!(
+            message_matching(&report, "nullable").is_none(),
+            "{:?}",
+            report.findings
+        );
     }
 
     #[test]
-    fn many_nullables_collapse_into_one_finding() {
-        // The real documents use `nullable` hundreds of times; one finding each
-        // would bury every other thing this function reports.
-        let mut doc = good_doc();
-        let props = doc["components"]["schemas"]["ThingHappened"]["properties"]
-            .as_object_mut()
-            .unwrap();
-        for index in 0..20 {
-            props.insert(
-                format!("field{index}"),
-                json!({ "type": "string", "nullable": true }),
-            );
-        }
-        let report = validate(&doc, None);
-
-        let nullable_findings: Vec<_> = report
-            .findings
-            .iter()
-            .filter(|f| f.message.contains("nullable"))
-            .collect();
-        assert_eq!(nullable_findings.len(), 1);
-        assert!(nullable_findings[0].message.contains("20 fields are affected"));
-        assert!(nullable_findings[0].message.contains("and 15 more"));
-    }
-
-    #[test]
-    fn the_nullable_finding_carries_its_repair_and_others_do_not() {
-        // The editor renders the "fix all" button off this field. It used to
-        // match the message prose, so rewording the sentence would have removed
-        // the button with nothing failing.
-        let doc = with_payload_field(json!({ "type": "string", "nullable": true }));
-        let report = validate(&doc, None);
-
-        let fixable: Vec<&Finding> =
-            report.findings.iter().filter(|f| f.fix.is_some()).collect();
-        assert_eq!(fixable.len(), 1, "{:?}", report.findings);
-        assert_eq!(fixable[0].fix, Some(Fix::WidenNullable));
-        assert!(fixable[0].message.contains("nullable"));
-
-        // And applying it clears the finding, which is the button's contract.
-        let repaired = openapi::widen_nullable(&doc);
-        assert!(validate(&repaired, None)
-            .findings
-            .iter()
-            .all(|f| f.fix.is_none()));
-    }
-
-    #[test]
-    fn a_document_without_nullable_says_nothing_about_it() {
+    fn a_type_list_blocks_the_save_and_names_the_field() {
+        // The registry answers this with "'components/schemas/X' oneOf failed",
+        // which names the component and not the field. This does.
         let doc = with_payload_field(json!({ "type": ["string", "null"] }));
         let report = validate(&doc, None);
-        assert!(message_matching(&report, "nullable").is_none());
+        assert!(!report.valid);
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.message.contains("`type` is a list"))
+            .expect("a type-list finding");
+        assert_eq!(finding.severity, Severity::Error);
+        assert_eq!(finding.fix, Some(Fix::Openapi30));
+        assert!(finding
+            .message
+            .contains("`/components/schemas/ThingHappened/properties/veteranId`"));
+
+        // And the fix clears it, which is the button's contract.
+        let (repaired, changed) = openapi::to_openapi_30(&doc);
+        assert_eq!(
+            changed,
+            vec!["/components/schemas/ThingHappened/properties/veteranId"]
+        );
+        let report = validate(&repaired, None);
+        assert!(report.valid, "findings: {:?}", report.findings);
+    }
+
+    #[test]
+    fn keywords_openapi_30_lacks_are_errors_with_a_fix_where_one_exists() {
+        let doc = with_payload_field(json!({
+            "type": "string",
+            "const": "x",
+            "patternProperties": { "^a": {} }
+        }));
+        let report = validate(&doc, None);
+        assert!(!report.valid);
+        let by_keyword = |k: &str| {
+            report
+                .findings
+                .iter()
+                .find(|f| f.message.starts_with(&format!("`{k}`")))
+                .unwrap_or_else(|| panic!("no finding for {k}: {:?}", report.findings))
+        };
+        assert_eq!(by_keyword("const").fix, Some(Fix::Openapi30));
+        assert_eq!(by_keyword("patternProperties").fix, None);
+    }
+
+    #[test]
+    fn nullable_without_a_type_is_the_one_nullable_ajv_refuses() {
+        let doc = with_payload_field(json!({ "nullable": true, "description": "x" }));
+        let report = validate(&doc, None);
+        assert!(!report.valid);
+        assert!(message_matching(&report, "cannot be used without").is_some());
+    }
+    #[test]
+    fn a_plain_typed_field_says_nothing_about_null() {
+        let doc = with_payload_field(json!({ "type": "string" }));
+        let report = validate(&doc, None);
+        assert!(
+            message_matching(&report, "null").is_none(),
+            "{:?}",
+            report.findings
+        );
     }
 
     #[test]
@@ -1043,17 +1197,19 @@ mod tests {
     }
 
     #[test]
-    fn post_draft_07_keywords_are_reported_as_inert() {
+    fn post_draft_07_keywords_are_reported_as_inert_and_unsaveable() {
         let mut doc = good_doc();
         doc["components"]["schemas"]["ThingHappened"]["dependentRequired"] =
             json!({ "veteranId": ["claimId"] });
         let report = validate(&doc, None);
 
-        assert!(report.valid);
+        // Two facts about one keyword: Ajv would ignore it, and the registry
+        // will not store it at all.
         let message =
-            message_matching(&report, "dependentRequired").expect("a dependentRequired finding");
-        assert!(message.contains("constrains nothing"), "{message}");
+            message_matching(&report, "constrains nothing").expect("an inert-keyword finding");
         assert!(message.contains("`dependencies`"), "{message}");
+        assert!(!report.valid);
+        assert!(message_matching(&report, "registry refuses").is_some());
     }
 
     #[test]

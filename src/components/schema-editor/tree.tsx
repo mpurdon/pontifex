@@ -324,25 +324,12 @@ function TreeRow({ node, path, ...rest }: TreeProps) {
 
         {fieldHistory && <HistoryBadge history={fieldHistory} />}
 
-        {/* Two different facts that used to share one badge. `type` including
-            `"null"` genuinely accepts null; `nullable: true` is an OpenAPI
-            keyword the bus ignores, so a field carrying only that rejects null
-            at runtime — the opposite of what the badge implied. */}
         {node.acceptsNull && (
           <span
             className="shrink-0 rounded bg-surface-3 px-1 py-px font-mono text-[9px] leading-none text-ink-faint"
             title="Accepts null"
           >
             null
-          </span>
-        )}
-
-        {node.nullable && (
-          <span
-            className="shrink-0 rounded bg-warn/15 px-1 py-px font-mono text-[9px] leading-none text-warn"
-            title="`nullable: true` is ignored by the bus's validator — this field still rejects null. Open it to rewrite as a null-accepting type."
-          >
-            nullable?
           </span>
         )}
 
