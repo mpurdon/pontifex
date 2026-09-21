@@ -393,10 +393,27 @@ pub struct Settings {
     /// filters by category, which is what makes that volume usable.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Which zone event times are shown in. The data is epoch milliseconds
+    /// either way; this only changes the rendering.
+    #[serde(default)]
+    pub time_zone: TimeZone,
 }
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+/// The zone timestamps are displayed in.
+///
+/// `Local` is the machine's zone; `Utc` is what CloudWatch, EventBridge's
+/// `time` field and the AWS console all speak, so reading one against the
+/// other is one fewer conversion done in your head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TimeZone {
+    #[default]
+    Local,
+    Utc,
 }
 
 impl Settings {
@@ -438,6 +455,7 @@ impl Settings {
             panel_sizes: Default::default(),
             developer_mode: false,
             log_level: default_log_level(),
+            time_zone: TimeZone::default(),
         }
     }
 }

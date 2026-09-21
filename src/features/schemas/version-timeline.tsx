@@ -6,7 +6,8 @@ import { Badge, Button, EmptyState, ErrorBox, Spinner } from '@/components/ui'
 import { buildTree, payloadSchemaName, type SchemaNode } from '@/lib/schema-model'
 import { countChanges, diffTrees } from '@/lib/schema-diff'
 import { recurringFields } from '@/lib/schema-history'
-import { formatAge } from '@/lib/format'
+import { formatAge, formatDateTime } from '@/lib/format'
+import { useSettings } from '@/app/settings-context'
 import { SchemaTree } from '@/components/schema-editor/tree'
 import { useSchemaHistory } from './use-schema-history'
 
@@ -29,6 +30,7 @@ export function VersionTimeline({
 }) {
   const history = useSchemaHistory(name, envId)
   const entries: SchemaHistoryEntry[] = history.entries
+  const { timeZone } = useSettings()
 
   // Index into `entries`, which is newest-first. The slider runs oldest → newest
   // left to right, so it is presented reversed; this stays in data order.
@@ -137,7 +139,7 @@ export function VersionTimeline({
           <span className="text-ink-faint">
             {Number.isNaN(at)
               ? 'date unknown'
-              : `${formatAge(Date.now() - at)} ago · ${new Date(at).toLocaleString()}`}
+              : `${formatAge(Date.now() - at)} ago · ${formatDateTime(at, timeZone)}`}
           </span>
 
           <span className="ml-auto flex items-center gap-1">

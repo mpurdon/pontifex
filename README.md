@@ -540,6 +540,13 @@ abc-123` on its own — or a complete CloudWatch filter pattern if you would
 rather write it yourself. A hit is recorded in the Watch screen, badged on the
 nav and the dock, and (per watch) raised as a desktop notification.
 
+Times on the Logs and Watch screens are shown in your machine's zone or in
+UTC — the zone CloudWatch, EventBridge's `time` field and the AWS console all
+use — switched with the **local / UTC** control in either toolbar. One
+setting, remembered across restarts. Event times genuinely end in `.000`:
+EventBridge stamps the log event with its own `time`, which has no
+sub-second part.
+
 It is passive by construction. The bus already writes every event to its
 `/aws/events/*` log group through a catch-all rule, so watching is nothing more
 than `FilterLogEvents` on a timer with a moving cursor. No rule, queue or

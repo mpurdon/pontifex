@@ -250,6 +250,7 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::save_panel_sizes,
+            commands::settings::set_time_zone,
             commands::settings::set_active_environment,
             commands::settings::default_environment_for_stage,
             commands::settings::stages,

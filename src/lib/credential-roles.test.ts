@@ -47,6 +47,7 @@ function settings(overrides: Partial<Settings>): Settings {
     panelSizes: {},
     developerMode: false,
     logLevel: 'info',
+    timeZone: 'local',
     ...overrides,
   }
 }

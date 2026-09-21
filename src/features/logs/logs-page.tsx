@@ -18,6 +18,7 @@ import {
 import { useSettings } from '@/app/settings-context'
 import { useLoginForEnvironment } from '@/app/login-dialog'
 import { formatTime } from '@/lib/format'
+import { TimeZoneToggle } from '@/components/time-zone-toggle'
 
 const RANGES = [
   { label: 'Last 15m', minutes: 15 },
@@ -28,7 +29,7 @@ const RANGES = [
 ]
 
 export function LogsPage() {
-  const { envId, activeEnvironment } = useSettings()
+  const { envId, activeEnvironment, timeZone } = useSettings()
   const credentials = useLoginForEnvironment(activeEnvironment)
 
   const [logGroup, setLogGroup] = useState('')
@@ -162,6 +163,7 @@ export function LogsPage() {
         </Button>
 
         <div className="ml-auto flex items-center gap-2">
+          <TimeZoneToggle />
           <Checkbox
             checked={autoRefresh}
             onChange={(e) => setAutoRefresh(e.target.checked)}
@@ -218,7 +220,9 @@ export function LogsPage() {
             <thead className="sticky top-0 bg-surface-1">
               <tr className="border-b border-edge text-left text-ink-faint">
                 <th className="w-6" />
-                <th className="whitespace-nowrap px-2 py-1 font-medium">Time</th>
+                <th className="whitespace-nowrap px-2 py-1 font-medium">
+                  Time <span className="font-normal text-ink-faint">{timeZone === 'utc' ? 'UTC' : 'local'}</span>
+                </th>
                 <th className="whitespace-nowrap px-2 py-1 font-medium">Source</th>
                 <th className="whitespace-nowrap px-2 py-1 font-medium">Detail type</th>
                 {/* The slack column: sized to whatever the name columns leave. */}
@@ -257,6 +261,7 @@ function LogRow({
   expanded: boolean
   onToggle: () => void
 }) {
+  const { timeZone } = useSettings()
   return (
     <>
       <tr
@@ -271,7 +276,7 @@ function LogRow({
           )}
         </td>
         <td className="whitespace-nowrap px-2 py-1 font-mono text-ink-faint">
-          {formatTime(event.timestamp)}
+          {formatTime(event.timestamp, timeZone)}
         </td>
         <td className="whitespace-nowrap px-2 py-1">
           {event.source ? (

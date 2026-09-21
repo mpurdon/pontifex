@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useMemo, type ReactNode } from 'react'
 import * as ipc from '@/lib/ipc'
-import type { Environment, Settings } from '@/lib/types'
+import type { Environment, Settings, TimeZone } from '@/lib/types'
 
 interface SettingsContextValue {
   settings: Settings | undefined
@@ -19,6 +19,10 @@ interface SettingsContextValue {
    * a later full save does not write back stale sizes.
    */
   savePanelSizes: (id: string, sizes: number[]) => void
+  /** The zone times are shown in; `local` until settings load. */
+  timeZone: TimeZone
+  /** Same light path as panel sizes: a display choice must not refetch AWS. */
+  setTimeZone: (zone: TimeZone) => void
   isSaving: boolean
 }
 
@@ -63,6 +67,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     onSuccess: (next) => queryClient.setQueryData(['settings'], next),
   })
 
+  const setZone = useMutation({
+    mutationFn: ipc.setTimeZone,
+    onSuccess: (next) => queryClient.setQueryData(['settings'], next),
+  })
+
   const value = useMemo<SettingsContextValue>(() => {
     const activeEnvironment = settings?.environments.find(
       (e) => e.id === settings.activeEnvironmentId,
@@ -75,9 +84,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setActiveEnvironment: (envId) => setActive.mutate(envId),
       saveSettings: (next) => save.mutateAsync(next),
       savePanelSizes: (id, sizes) => savePanels.mutate({ id, sizes }),
+      timeZone: settings?.timeZone ?? 'local',
+      setTimeZone: (zone) => setZone.mutate(zone),
       isSaving: save.isPending,
     }
-  }, [settings, isLoading, setActive, save, savePanels])
+  }, [settings, isLoading, setActive, save, savePanels, setZone])
 
   return (
     <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>

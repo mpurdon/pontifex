@@ -28,7 +28,8 @@ import * as ipc from '@/lib/ipc'
 import type { CompiledWatch, Environment, FiledTicket, IpcError, Issue, NotifierOutcome, Watch, WatchCondition, WatchHit, WatchMark, WatchProbe, WatchStatus } from '@/lib/types'
 import { KIND_LABELS, SEVERITY_TONE, describeSeverity } from '@/lib/issues'
 import { FileTicketDialog, FiledChip } from '@/features/jira/file-ticket-dialog'
-import { formatAge, formatTime, stringify } from '@/lib/format'
+import { formatAge, formatDateTime, formatMoment, formatTime, stringify } from '@/lib/format'
+import { TimeZoneToggle } from '@/components/time-zone-toggle'
 import {
   Badge,
   Button,
@@ -159,7 +160,7 @@ function summarize(watch: Watch): string {
 }
 
 export function WatchPage() {
-  const { envId, activeEnvironment } = useSettings()
+  const { envId, activeEnvironment, timeZone } = useSettings()
   const credentials = useLoginForEnvironment(activeEnvironment)
   const queryClient = useQueryClient()
 
@@ -394,6 +395,7 @@ export function WatchPage() {
               <option value={0}>never</option>
             </Select>
           </label>
+          <TimeZoneToggle />
           <NotifierControls />
         </div>
       </Toolbar>
@@ -485,7 +487,9 @@ export function WatchPage() {
               <thead className="sticky top-0 bg-surface-1">
                 <tr className="border-b border-edge text-left text-ink-faint">
                   <th className="w-6" />
-                  <th className="whitespace-nowrap px-2 py-1 font-medium">Time</th>
+                  <th className="whitespace-nowrap px-2 py-1 font-medium">
+                    Time <span className="font-normal text-ink-faint">{timeZone === 'utc' ? 'UTC' : 'local'}</span>
+                  </th>
                   <th className="whitespace-nowrap px-2 py-1 font-medium">Watch</th>
                   <th className="whitespace-nowrap px-2 py-1 font-medium">Source</th>
                   {/* The slack column: shows the whole name whenever there is
@@ -1457,7 +1461,8 @@ function MarkRow({
   stack: number
 }) {
   const now = useNow(30_000)
-  const when = formatMoment(mark.at)
+  const { timeZone } = useSettings()
+  const when = formatMoment(mark.at, timeZone)
   return (
     <tr>
       {/*
@@ -1499,14 +1504,6 @@ function MarkRow({
   )
 }
 
-/** A time today as HH:MM; otherwise date and time. */
-function formatMoment(ms: number): string {
-  const date = new Date(ms)
-  return date.toDateString() === new Date().toDateString()
-    ? date.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' })
-    : date.toLocaleString([], { hour12: false })
-}
-
 function HitRow({
   hit,
   color,
@@ -1529,6 +1526,7 @@ function HitRow({
   onToggle: () => void
 }) {
   const navigate = useNavigate()
+  const { timeZone } = useSettings()
   const identity = hit.source && hit.detailType ? `${hit.source}@${hit.detailType}` : null
 
   return (
@@ -1544,8 +1542,11 @@ function HitRow({
         <td className="pl-2 text-ink-faint">
           {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         </td>
-        <td className="whitespace-nowrap px-2 py-1 font-mono text-ink-faint" title={new Date(hit.timestamp).toLocaleString()}>
-          {formatTime(hit.timestamp)}
+        <td
+          className="whitespace-nowrap px-2 py-1 font-mono text-ink-faint"
+          title={formatDateTime(hit.timestamp, timeZone)}
+        >
+          {formatTime(hit.timestamp, timeZone)}
         </td>
         <td className="whitespace-nowrap px-2 py-1">
           {color ? (
@@ -1610,7 +1611,7 @@ function HitRow({
             <div className="flex items-center gap-3 px-3 pt-2 font-mono text-[10px] text-ink-faint">
               <span>{hit.eventId ?? 'no id'}</span>
               <span>{hit.logGroup}</span>
-              <span>seen {formatTime(hit.receivedAt)}</span>
+              <span>seen {formatTime(hit.receivedAt, timeZone)}</span>
             </div>
             <div className="flex min-w-0 flex-col gap-2 p-2 md:flex-row">
               <div className="flex min-w-0 flex-1 flex-col gap-2">

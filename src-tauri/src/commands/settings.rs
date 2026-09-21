@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::settings::{self, ClaudeSettingsImport, Environment, Settings};
+use crate::settings::{self, ClaudeSettingsImport, Environment, Settings, TimeZone};
 use crate::state::AppState;
 use tauri::State;
 
@@ -60,6 +60,21 @@ pub async fn save_panel_sizes(
     {
         let mut guard = state.settings.write().await;
         guard.panel_sizes.insert(id, sizes);
+    }
+    state.persist().await?;
+    Ok(state.settings_snapshot().await)
+}
+
+/// Switch the zone times are displayed in.
+///
+/// Its own command for the same reason as `save_panel_sizes`: a full save
+/// invalidates the registry, logs and topology, and flipping local/UTC on the
+/// Logs screen must not send it back to CloudWatch for the same events.
+#[tauri::command]
+pub async fn set_time_zone(state: State<'_, AppState>, zone: TimeZone) -> Result<Settings> {
+    {
+        let mut guard = state.settings.write().await;
+        guard.time_zone = zone;
     }
     state.persist().await?;
     Ok(state.settings_snapshot().await)

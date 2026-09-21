@@ -196,7 +196,12 @@ export interface Settings {
   developerMode: boolean
   /** `off` | `error` | `warn` | `info` | `debug` | `trace`. */
   logLevel: string
+  /** The zone event times are displayed in. Data is epoch millis regardless. */
+  timeZone: TimeZone
 }
+
+/** `local` is the machine's zone; `utc` is what CloudWatch and EventBridge speak. */
+export type TimeZone = 'local' | 'utc'
 
 // --- developer tools ------------------------------------------------------
 

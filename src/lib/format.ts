@@ -6,6 +6,8 @@
  * other. Anything that turns a number into words for the user belongs here.
  */
 
+import type { TimeZone } from './types'
+
 /** Sampling windows offered wherever events are fetched by time range. */
 export const WINDOWS = [
   { label: 'Last 1h', minutes: 60 },
@@ -25,11 +27,40 @@ export function formatAge(ms: number): string {
   return hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`
 }
 
+/**
+ * Every clock shown to the user takes the display zone explicitly.
+ *
+ * Reading it from a module-level setting would be simpler, but memoised rows
+ * would then keep the old zone until something else re-rendered them. Passing
+ * it in makes the zone a dependency the renderer can see.
+ */
+
+/** `Intl` option for the zone: `undefined` means the machine's own. */
+function zoneOption(zone: TimeZone): string | undefined {
+  return zone === 'utc' ? 'UTC' : undefined
+}
+
 /** A clock time with milliseconds, `HH:MM:SS.mmm`, for event rows. */
-export function formatTime(ms: number | null): string {
+export function formatTime(ms: number | null, zone: TimeZone = 'local'): string {
   if (ms === null) return '—'
   const date = new Date(ms)
-  return `${date.toLocaleTimeString([], { hour12: false })}.${String(date.getMilliseconds()).padStart(3, '0')}`
+  const clock = date.toLocaleTimeString([], { hour12: false, timeZone: zoneOption(zone) })
+  return `${clock}.${String(date.getMilliseconds()).padStart(3, '0')}`
+}
+
+/** Date and time, for tooltips and version history. */
+export function formatDateTime(ms: number, zone: TimeZone = 'local'): string {
+  return new Date(ms).toLocaleString([], { hour12: false, timeZone: zoneOption(zone) })
+}
+
+/** A time today as HH:MM; otherwise date and time. */
+export function formatMoment(ms: number, zone: TimeZone = 'local'): string {
+  const tz = zoneOption(zone)
+  const date = new Date(ms)
+  const day = (d: Date) => d.toLocaleDateString([], { timeZone: tz })
+  return day(date) === day(new Date())
+    ? date.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', timeZone: tz })
+    : formatDateTime(ms, zone)
 }
 
 /** A sampling window as a span, e.g. `24h` or `7d`. */

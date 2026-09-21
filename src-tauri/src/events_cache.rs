@@ -446,7 +446,11 @@ fn evict(samples: &mut HashMap<String, CachedSample>) -> usize {
 }
 
 pub fn now_ms() -> i64 {
-    time::OffsetDateTime::now_utc().unix_timestamp() * 1000
+    // Real milliseconds: this stamps when a watch hit was seen, and a clock
+    // truncated to the second made every "seen" time end in .000, which read
+    // as a bug next to event times that genuinely do (EventBridge's `time`
+    // has no sub-second part).
+    (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64
 }
 
 /// Parse a raw CloudWatch log message into a cacheable event.

@@ -43,6 +43,7 @@ import type {
   SchemaSummary,
   SchemaVersionSummary,
   Settings,
+  TimeZone,
   NullableRepair,
   SimplifyPreview,
   SsoAccount,
@@ -215,6 +216,10 @@ export const saveSettings = (settings: Settings) =>
 /** Panel geometry only — see `save_panel_sizes` for why it is not a full save. */
 export const savePanelSizes = (id: string, sizes: number[]) =>
   invoke<Settings>('save_panel_sizes', { id, sizes })
+
+/** Persist the display zone without invalidating anything fetched from AWS. */
+export const setTimeZone = (zone: TimeZone) =>
+  invoke<Settings>('set_time_zone', { zone })
 
 export const setActiveEnvironment = (envId: string) =>
   invoke<Settings>('set_active_environment', { envId })
