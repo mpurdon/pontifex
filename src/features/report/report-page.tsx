@@ -481,10 +481,14 @@ export function ReportPage() {
                 }
               />
             ) : (
-              /* Fixed layout: with auto layout the drift cell wrapped into
-                 four lines and every row grew to match, so 30 rows filled the
-                 screen. Fixed widths plus nowrap keep a row one line tall. */
-              <table className="w-full table-fixed border-collapse text-[11px]">
+              /* Auto layout so the Schema column grows to fit its longest
+                 name instead of cutting it at a fixed width. Two things keep
+                 that from misbehaving: every cell is nowrap, so a long drift
+                 summary cannot wrap and set the height of every row; and
+                 Detail alone is `w-full max-w-0`, so it is the one column
+                 that absorbs the slack and truncates, rather than the name
+                 column pushing Pass/Fail to the far side of the window. */
+              <table className="w-full table-auto border-collapse text-[11px]">
                 <thead className="sticky top-0 bg-surface-0">
                   <tr className="border-b border-edge text-left text-ink-faint">
                     {/* Selecting rows is for filing them; a row with nothing
@@ -506,16 +510,13 @@ export function ReportPage() {
                         title="Select every schema with something to file"
                       />
                     </th>
-                    <th className="w-[92px] px-2 py-1 font-medium">Status</th>
-                    {/* Sized to the content rather than left to absorb all the
-                        slack — an auto-width name column pushed Pass/Fail to
-                        the far side of the window. */}
-                    <th className="w-[340px] px-2 py-1 font-medium">Schema</th>
-                    <th className="w-[72px] px-2 py-1 text-right font-medium">
+                    <th className="whitespace-nowrap px-2 py-1 font-medium">Status</th>
+                    <th className="whitespace-nowrap px-2 py-1 font-medium">Schema</th>
+                    <th className="whitespace-nowrap px-2 py-1 text-right font-medium">
                       Pass/Fail
                     </th>
-                    <th className="w-[180px] px-2 py-1 font-medium">Drift</th>
-                    <th className="px-2 py-1 font-medium">Detail</th>
+                    <th className="whitespace-nowrap px-2 py-1 font-medium">Drift</th>
+                    <th className="w-full px-2 py-1 font-medium">Detail</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -601,8 +602,8 @@ const Row = memo(function Row({
         </span>
       </td>
 
-      <td className="px-2 font-mono text-ink-muted">
-        <span className="block truncate pr-2" title={row.name}>
+      <td className="whitespace-nowrap px-2 font-mono text-ink-muted">
+        <span className="block max-w-[40rem] truncate pr-2" title={row.name}>
           {row.name}
           {row.wireIdentity && (
             <span
@@ -635,7 +636,7 @@ const Row = memo(function Row({
 
       {/* One line, always: the counts are abbreviated and never wrap, because
           a wrapping cell used to set the height of every row in the table. */}
-      <td className="overflow-hidden whitespace-nowrap px-2 text-ink-faint">
+      <td className="whitespace-nowrap px-2 text-ink-faint">
         {drift === 0 ? (
           '—'
         ) : (
@@ -664,7 +665,7 @@ const Row = memo(function Row({
         )}
       </td>
 
-      <td className="px-2 text-ink-faint">
+      <td className="w-full max-w-0 px-2 text-ink-faint">
         <span className="flex items-center gap-1.5">
           <span className="min-w-0 truncate" title={row.headline ?? ''}>
             {row.headline ?? ''}

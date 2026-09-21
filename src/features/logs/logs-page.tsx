@@ -218,10 +218,11 @@ export function LogsPage() {
             <thead className="sticky top-0 bg-surface-1">
               <tr className="border-b border-edge text-left text-ink-faint">
                 <th className="w-6" />
-                <th className="w-24 px-2 py-1 font-medium">Time</th>
-                <th className="w-48 px-2 py-1 font-medium">Source</th>
-                <th className="w-56 px-2 py-1 font-medium">Detail type</th>
-                <th className="px-2 py-1 font-medium">Event id</th>
+                <th className="whitespace-nowrap px-2 py-1 font-medium">Time</th>
+                <th className="whitespace-nowrap px-2 py-1 font-medium">Source</th>
+                <th className="whitespace-nowrap px-2 py-1 font-medium">Detail type</th>
+                {/* The slack column: sized to whatever the name columns leave. */}
+                <th className="w-full px-2 py-1 font-medium">Event id</th>
                 <th className="w-8" />
               </tr>
             </thead>
@@ -269,20 +270,20 @@ function LogRow({
             <ChevronRight className="size-3" />
           )}
         </td>
-        <td className="px-2 py-1 font-mono text-ink-faint">
+        <td className="whitespace-nowrap px-2 py-1 font-mono text-ink-faint">
           {formatTime(event.timestamp)}
         </td>
-        <td className="px-2 py-1">
+        <td className="whitespace-nowrap px-2 py-1">
           {event.source ? (
             <Badge tone="info">{event.source}</Badge>
           ) : (
             <span className="text-ink-faint">—</span>
           )}
         </td>
-        <td className="truncate px-2 py-1 font-mono text-ink-muted">
+        <td className="whitespace-nowrap px-2 py-1 font-mono text-ink-muted">
           {event.detailType ?? '—'}
         </td>
-        <td className="truncate px-2 py-1 font-mono text-ink-faint">
+        <td className="w-full max-w-0 truncate px-2 py-1 font-mono text-ink-faint">
           {event.eventId ?? '—'}
         </td>
         <td className="pr-1 text-right">

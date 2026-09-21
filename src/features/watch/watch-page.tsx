@@ -485,10 +485,12 @@ export function WatchPage() {
               <thead className="sticky top-0 bg-surface-1">
                 <tr className="border-b border-edge text-left text-ink-faint">
                   <th className="w-6" />
-                  <th className="w-24 px-2 py-1 font-medium">Time</th>
-                  <th className="w-40 px-2 py-1 font-medium">Watch</th>
-                  <th className="w-48 px-2 py-1 font-medium">Source</th>
-                  <th className="px-2 py-1 font-medium">Detail type</th>
+                  <th className="whitespace-nowrap px-2 py-1 font-medium">Time</th>
+                  <th className="whitespace-nowrap px-2 py-1 font-medium">Watch</th>
+                  <th className="whitespace-nowrap px-2 py-1 font-medium">Source</th>
+                  {/* The slack column: shows the whole name whenever there is
+                      room, and is the one that truncates when there is not. */}
+                  <th className="w-full px-2 py-1 font-medium">Detail type</th>
                   <th className="w-20" />
                 </tr>
               </thead>
@@ -1542,10 +1544,10 @@ function HitRow({
         <td className="pl-2 text-ink-faint">
           {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         </td>
-        <td className="px-2 py-1 font-mono text-ink-faint" title={new Date(hit.timestamp).toLocaleString()}>
+        <td className="whitespace-nowrap px-2 py-1 font-mono text-ink-faint" title={new Date(hit.timestamp).toLocaleString()}>
           {formatTime(hit.timestamp)}
         </td>
-        <td className="truncate px-2 py-1">
+        <td className="whitespace-nowrap px-2 py-1">
           {color ? (
             <span
               className="inline-flex shrink-0 items-center whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium"
@@ -1560,10 +1562,10 @@ function HitRow({
             </Badge>
           )}
         </td>
-        <td className="truncate px-2 py-1">
+        <td className="whitespace-nowrap px-2 py-1">
           {hit.source ? <Badge tone="info">{hit.source}</Badge> : <span className="text-ink-faint">—</span>}
         </td>
-        <td className="truncate px-2 py-1 font-mono text-ink-muted">
+        <td className="w-full max-w-0 truncate px-2 py-1 font-mono text-ink-muted" title={hit.detailType ?? undefined}>
           {hit.detailType ?? '—'}
         </td>
         <td className="pr-1 text-right whitespace-nowrap">
