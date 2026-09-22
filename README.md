@@ -28,7 +28,7 @@ Companion to `~/Projects/trajector/global-event-bus`.
 | **Watch**    | Passive, all-day listening. Define what to watch for — a source, a detail type, a payload field like `detail.clientId = abc-123` — and get a desktop notification and a hit log when it goes past. |
 | **Health**   | Every schema in the registry graded against real traffic in one pass — failing, drifting, healthy, or unseen — plus event types on the bus with no schema at all.                     |
 | **Topology** | What `stacks/busConfiguration.ts` declares versus what is actually deployed, with rules, targets and drift in both directions.                                                       |
-| **Settings** | AWS profiles with live status and SSO sign-in, per-stage environments, registry discovery, Bedrock model catalog.                                                                    |
+| **Settings** | AWS profiles with live status and SSO sign-in, per-stage environments, registry discovery, Bedrock model catalog, and the theme.                                                     |
 | **Developer**| Optional. The application log, where Pontifex's files live and how large they are, and cache state — for checking the app itself, not the bus.                                          |
 
 The registry is the source of truth. Local `schemas/` directories are an
@@ -788,6 +788,43 @@ Notes on a few choices:
   `src/features/logs/`, which silently excludes that feature from git *and*
   from Tailwind's class scanning, since Tailwind v4 honours `.gitignore` when
   detecting sources.
+
+## Themes
+
+Three to start: **Dark** (the original slate-and-amber), **Light** (the same
+palette on paper) and **Pontifex** (white ink on blueprint blue, ruled like a
+drafting sheet), plus **System** to follow the OS between light and dark.
+Pick one under **Settings → Appearance**; it applies immediately and is
+remembered.
+
+Every colour, radius and font in the app is a token. `src/index.css` maps the
+tokens Tailwind utilities use (`bg-surface-1`, `text-ink-muted`, `rounded-md`,
+…) onto plain CSS variables, and each theme is one file under `src/theme/`
+that values those variables for its `[data-theme='<id>']` selector. The
+attribute is set on `<html>` by `ThemeProvider`; the same attribute on any
+element scopes a theme to that subtree, which is how the picker previews
+each theme in its own colours.
+
+To add a theme:
+
+1. Copy `src/theme/dark.css` to `src/theme/<id>.css`, change the selector and
+   the values. Everything a theme can change is a token in that file — the
+   blueprint's grid is `--canvas-texture`, its inked panel frame and hatched
+   shade are `--panel-frame`, its capitals are `--heading-transform` — so
+   there are no theme-specific rules anywhere else. The shared components
+   mark plates with the `panel` class and the three tiers of chrome with
+   `chrome-app`, `chrome-page` and `chrome-panel`, which those tokens attach
+   to.
+   The `--editor-*` and `--type-*` tokens must be hex: Monaco reads them back
+   through `getComputedStyle` and cannot take `oklch()`.
+2. `@import` it from `src/index.css`.
+3. Add an entry to `THEMES` in `src/theme/themes.ts` with the label and the
+   colour scheme (which picks Monaco's light or dark base).
+
+`src/theme/themes.test.ts` fails if a registered theme's file misses a token,
+writes an editor token in anything but hex, or is not imported. Nothing on
+the Rust side changes: the setting is stored as the id string, and an id the
+registry no longer knows falls back to Dark.
 
 ## Developer mode
 

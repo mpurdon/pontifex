@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useMemo, type ReactNode } from 'react'
 import * as ipc from '@/lib/ipc'
 import type { Environment, Settings, TimeZone } from '@/lib/types'
+import { DEFAULT_ZOOM } from './zoom'
 
 interface SettingsContextValue {
   settings: Settings | undefined
@@ -23,6 +24,12 @@ interface SettingsContextValue {
   timeZone: TimeZone
   /** Same light path as panel sizes: a display choice must not refetch AWS. */
   setTimeZone: (zone: TimeZone) => void
+  /** A theme id or `system`; see `src/theme/themes.ts`. Same light path. */
+  setTheme: (theme: string) => void
+  /** Webview zoom factor; `1` until settings load. */
+  zoom: number
+  /** Persists the level only — applying it is `applyZoom` in `app/zoom.ts`. */
+  setZoom: (zoom: number) => void
   isSaving: boolean
 }
 
@@ -60,17 +67,28 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     },
   })
 
+  // The light path: display preferences replace the cached settings and
+  // invalidate nothing, because nothing downstream depends on them.
+  const applyLight = (next: Settings) => queryClient.setQueryData(['settings'], next)
+
   const savePanels = useMutation({
     mutationFn: ({ id, sizes }: { id: string; sizes: number[] }) =>
       ipc.savePanelSizes(id, sizes),
-    // No query invalidation: nothing downstream depends on pane widths.
-    onSuccess: (next) => queryClient.setQueryData(['settings'], next),
+    onSuccess: applyLight,
   })
+  const setZone = useMutation({ mutationFn: ipc.setTimeZone, onSuccess: applyLight })
+  const setTheme = useMutation({ mutationFn: ipc.setTheme, onSuccess: applyLight })
+  const setZoom = useMutation({ mutationFn: ipc.setZoom, onSuccess: applyLight })
 
-  const setZone = useMutation({
-    mutationFn: ipc.setTimeZone,
-    onSuccess: (next) => queryClient.setQueryData(['settings'], next),
-  })
+  // Depend on the stable `mutate` functions, not the mutation objects: those
+  // are new every render, and a value that changed with them would re-render
+  // every consumer (the editors included) on each pane drag.
+  const { mutate: setActiveMutate } = setActive
+  const { mutateAsync: saveMutateAsync, isPending: isSaving } = save
+  const { mutate: savePanelsMutate } = savePanels
+  const { mutate: setZoneMutate } = setZone
+  const { mutate: setThemeMutate } = setTheme
+  const { mutate: setZoomMutate } = setZoom
 
   const value = useMemo<SettingsContextValue>(() => {
     const activeEnvironment = settings?.environments.find(
@@ -81,14 +99,27 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       isLoading,
       activeEnvironment,
       envId: activeEnvironment?.id,
-      setActiveEnvironment: (envId) => setActive.mutate(envId),
-      saveSettings: (next) => save.mutateAsync(next),
-      savePanelSizes: (id, sizes) => savePanels.mutate({ id, sizes }),
+      setActiveEnvironment: setActiveMutate,
+      saveSettings: saveMutateAsync,
+      savePanelSizes: (id, sizes) => savePanelsMutate({ id, sizes }),
       timeZone: settings?.timeZone ?? 'local',
-      setTimeZone: (zone) => setZone.mutate(zone),
-      isSaving: save.isPending,
+      setTimeZone: setZoneMutate,
+      setTheme: setThemeMutate,
+      zoom: settings?.zoom ?? DEFAULT_ZOOM,
+      setZoom: setZoomMutate,
+      isSaving,
     }
-  }, [settings, isLoading, setActive, save, savePanels, setZone])
+  }, [
+    settings,
+    isLoading,
+    setActiveMutate,
+    saveMutateAsync,
+    isSaving,
+    savePanelsMutate,
+    setZoneMutate,
+    setThemeMutate,
+    setZoomMutate,
+  ])
 
   return (
     <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>

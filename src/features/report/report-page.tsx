@@ -399,7 +399,7 @@ export function ReportPage() {
         </div>
       </Toolbar>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3">
         {run.isError && <ErrorBox error={run.error} {...credentials} />}
 
         {!report && !run.isPending && !run.isError && (

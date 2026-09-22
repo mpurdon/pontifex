@@ -80,7 +80,9 @@ export function ConcernDialog({
   return (
     <>
       <Modal open={open && !issue} onClose={onClose} width={560} className="flex flex-col gap-3 p-4">
-        <ModalTitle>Raise a concern about {subject.label}</ModalTitle>
+        <ModalTitle>
+          Raise a concern about <span className="normal-case">{subject.label}</span>
+        </ModalTitle>
         <ModalDescription>
           For what the validator cannot see: a misleading name, a field that should not be
           there, a type that fits the traffic but is the wrong contract. It files to the team

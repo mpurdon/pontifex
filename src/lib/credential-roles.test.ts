@@ -32,6 +32,8 @@ function settings(overrides: Partial<Settings>): Settings {
       claudeSettingsPath: null,
     },
     scan: { maxSeconds: 30, maxEvents: 5000, cacheMb: 32 },
+    theme: 'dark',
+    zoom: 1,
     github: { org: null, ignore: [] },
     jira: {
       clientId: '',

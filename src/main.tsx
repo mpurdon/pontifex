@@ -5,6 +5,8 @@ import { Navigate, RouterProvider, createHashRouter } from 'react-router-dom'
 import './index.css'
 import { Shell } from './app/shell'
 import { SettingsProvider } from './app/settings-context'
+import { ThemeProvider, applyCachedTheme } from './theme/theme-context'
+import { applyZoom, readCachedZoom } from './app/zoom'
 import { LoginProvider } from './app/login-dialog'
 import { AiDraftProvider } from './features/ai/ai-draft-context'
 import { WorkbenchProvider } from './features/schemas/workbench-context'
@@ -90,6 +92,12 @@ const router = createHashRouter([
   },
 ])
 
+// Before the first paint, so a light-theme user never sees dark chrome flash,
+// and a zoomed-in user does not watch the text grow.
+applyCachedTheme()
+const cachedZoom = readCachedZoom()
+if (cachedZoom !== null) applyZoom(cachedZoom)
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     {/*
@@ -100,13 +108,15 @@ createRoot(document.getElementById('root')!).render(
     <ErrorBoundary scope="The application">
       <QueryClientProvider client={queryClient}>
         <SettingsProvider>
-          <LoginProvider>
-            <AiDraftProvider>
-              <WorkbenchProvider>
-                <RouterProvider router={router} />
-              </WorkbenchProvider>
-            </AiDraftProvider>
-          </LoginProvider>
+          <ThemeProvider>
+            <LoginProvider>
+              <AiDraftProvider>
+                <WorkbenchProvider>
+                  <RouterProvider router={router} />
+                </WorkbenchProvider>
+              </AiDraftProvider>
+            </LoginProvider>
+          </ThemeProvider>
         </SettingsProvider>
       </QueryClientProvider>
     </ErrorBoundary>

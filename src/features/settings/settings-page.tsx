@@ -9,6 +9,7 @@ import {
   FolderOpen,
   Gauge,
   KeyRound,
+  Palette,
   Plus,
   RefreshCw,
   Sparkles,
@@ -52,6 +53,7 @@ import {
   formatCount,
 } from '@/lib/format'
 import { JiraSection } from '@/features/jira/jira-settings'
+import { TextSize, ThemePicker } from '@/theme/theme-picker'
 import {
   NO_ROLE,
   hasRole,
@@ -87,6 +89,7 @@ const TABS = [
     hint: 'Filing producer bugs with the team that owns them',
   },
   { id: 'repo', label: 'Repo', icon: FolderOpen, hint: 'Local global-event-bus checkout' },
+  { id: 'appearance', label: 'Appearance', icon: Palette, hint: 'Theme and text size' },
   { id: 'developer', label: 'Developer', icon: Wrench, hint: 'Logs and diagnostics' },
 ] as const
 
@@ -95,15 +98,17 @@ type TabId = (typeof TABS)[number]['id']
 export function SettingsPage() {
   const [tab, setTab] = useState<TabId>('credentials')
   const { settings, saveSettings, isSaving } = useSettings()
-  const [draft, setDraft] = useState<Settings | null>(null)
+  // The draft is edited against `base`, the settings it was cloned from, so
+  // that anything changed elsewhere while this page is open — the theme
+  // picker below, the time-zone toggle, a pane drag — is neither shown as an
+  // edit nor put back on save.
+  const [edit, setEdit] = useState<{ base: Settings; draft: Settings } | null>(null)
   const [saveError, setSaveError] = useState<IpcError | null>(null)
   const [saved, setSaved] = useState(false)
 
-  // Edit a local copy and save wholesale: partial writes would need a much
-  // larger command surface for no real benefit.
   useEffect(() => {
-    if (settings && !draft) setDraft(structuredClone(settings))
-  }, [settings, draft])
+    if (settings && !edit) setEdit(fresh(settings))
+  }, [settings, edit])
 
   const profiles = useQuery({
     queryKey: ['profiles'],
@@ -111,17 +116,21 @@ export function SettingsPage() {
     retry: false,
   })
 
-  if (!draft) return <Spinner label="Loading settings…" />
+  if (!edit || !settings) return <Spinner label="Loading settings…" />
+  const { base, draft } = edit
 
   const patch = (changes: Partial<Settings>) =>
-    setDraft((prev) => (prev ? { ...prev, ...changes } : prev))
+    setEdit((prev) => (prev ? { ...prev, draft: { ...prev.draft, ...changes } } : prev))
 
-  const dirty = JSON.stringify(draft) !== JSON.stringify(settings)
+  const dirty = JSON.stringify(draft) !== JSON.stringify(base)
 
+  // Save the live settings with only the fields the user edited laid over
+  // them. The command still writes wholesale, which keeps the surface small.
   const save = async () => {
     setSaveError(null)
     try {
-      await saveSettings(draft)
+      const next = await saveSettings({ ...settings, ...changedFields(base, draft) })
+      setEdit(fresh(next))
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (e) {
@@ -131,7 +140,7 @@ export function SettingsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-edge bg-surface-1 px-3 py-2">
+      <div className="chrome-page flex shrink-0 items-center gap-2 border-b border-edge bg-surface-1 px-3 py-2">
         <h1 className="text-xs font-semibold text-ink">Settings</h1>
         <div className="ml-auto flex items-center gap-2">
           {saved && (
@@ -141,10 +150,7 @@ export function SettingsPage() {
             </Badge>
           )}
           {dirty && (
-            <Button
-              variant="ghost"
-              onClick={() => setDraft(structuredClone(settings!))}
-            >
+            <Button variant="ghost" onClick={() => setEdit(fresh(settings))}>
               Discard
             </Button>
           )}
@@ -188,7 +194,7 @@ export function SettingsPage() {
           ))}
         </nav>
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3">
           {saveError && <ErrorBox error={saveError} />}
 
           {tab === 'credentials' && (
@@ -232,6 +238,13 @@ export function SettingsPage() {
             </>
           )}
 
+          {tab === 'appearance' && (
+            <>
+              <ThemePicker />
+              <TextSize />
+            </>
+          )}
+
           {tab === 'developer' && (
             <Panel title="Developer" bodyClassName="flex flex-col gap-2 p-2">
           <Checkbox
@@ -267,6 +280,22 @@ export function SettingsPage() {
       </div>
     </div>
   )
+}
+
+/** A draft to edit, and the snapshot it is measured against. */
+function fresh(settings: Settings) {
+  return { base: settings, draft: structuredClone(settings) }
+}
+
+/** The top-level fields of `draft` that differ from `base`. */
+function changedFields(base: Settings, draft: Settings): Partial<Settings> {
+  const changed: Partial<Settings> = {}
+  for (const key of Object.keys(draft) as (keyof Settings)[]) {
+    if (JSON.stringify(draft[key]) !== JSON.stringify(base[key])) {
+      Object.assign(changed, { [key]: draft[key] })
+    }
+  }
+  return changed
 }
 
 // --- SSO sessions ---------------------------------------------------------
@@ -1261,7 +1290,7 @@ function AiSection({
                   name="selectedModel"
                   checked={draft.llm.selectedModelId === model.id}
                   onChange={() => setLlm({ selectedModelId: model.id })}
-                  className="size-3 accent-[var(--color-accent)]"
+                  className="size-3 accent-accent"
                 />
                 <span className="w-24 shrink-0 text-[11px] text-ink">
                   {model.label}

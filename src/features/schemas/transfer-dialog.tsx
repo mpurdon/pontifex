@@ -324,7 +324,7 @@ function ImportPlanTable({
                       checked={selected.has(entry.name)}
                       disabled={!selectable}
                       onChange={() => onToggle(entry.name)}
-                      className="size-3 accent-[var(--color-accent)]"
+                      className="size-3 accent-accent"
                     />
                   </td>
                   <td className="py-1">

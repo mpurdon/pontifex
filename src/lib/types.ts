@@ -198,6 +198,14 @@ export interface Settings {
   logLevel: string
   /** The zone event times are displayed in. Data is epoch millis regardless. */
   timeZone: TimeZone
+  /**
+   * A theme id from `src/theme/themes.ts`, or `system`. A plain string on
+   * purpose: the registry, not the settings schema, decides what is valid, so
+   * adding a theme touches nothing on the Rust side.
+   */
+  theme: string
+  /** Webview zoom factor; the text size. `1` is native. */
+  zoom: number
 }
 
 /** `local` is the machine's zone; `utc` is what CloudWatch and EventBridge speak. */

@@ -878,7 +878,7 @@ function RemoveTypeDialog({
     <Modal onClose={onCancel} width={440} className="p-4">
           <ModalTitle>
             <Trash2 className="size-4" />
-            Remove <span className="font-mono">{name}</span>
+            Remove <span className="font-mono normal-case">{name}</span>
           </ModalTitle>
 
           <ModalDescription className="mt-2">

@@ -231,7 +231,7 @@ export function DeveloperPage() {
         </div>
       </Toolbar>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3">
         {info.isError && <ErrorBox error={ipc.asIpcError(info.error)} />}
         {info.isLoading && <Spinner label="Gathering diagnostics…" />}
 
@@ -369,7 +369,7 @@ export function DeveloperPage() {
                   Logs
                   {info.data.logFile ? (
                     <span
-                      className="font-mono text-[10px] font-normal text-ink-faint"
+                      className="font-mono text-[10px] font-normal normal-case text-ink-faint"
                       title={info.data.logFile}
                     >
                       {info.data.logFile.split('/').pop()}

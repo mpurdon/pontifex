@@ -221,6 +221,10 @@ export const savePanelSizes = (id: string, sizes: number[]) =>
 export const setTimeZone = (zone: TimeZone) =>
   invoke<Settings>('set_time_zone', { zone })
 
+export const setTheme = (theme: string) => invoke<Settings>('set_theme', { theme })
+
+export const setZoom = (zoom: number) => invoke<Settings>('set_zoom', { zoom })
+
 export const setActiveEnvironment = (envId: string) =>
   invoke<Settings>('set_active_environment', { envId })
 

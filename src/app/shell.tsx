@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   Braces,
@@ -16,6 +17,7 @@ import { useSettings } from './settings-context'
 import { useLoginForEnvironment } from './login-dialog'
 import { useWatchEvents, useWatchStatuses } from '@/features/watch/use-watch-events'
 import { IdleWatchGuard } from '@/features/watch/idle-guard'
+import { applyZoom, zoomForKey } from './zoom'
 
 const NAV = [
   { to: '/schemas', label: 'Schemas', icon: Braces },
@@ -136,10 +138,37 @@ function useUnreadHits(): number {
   return data?.reduce((n, s) => n + s.unread, 0) ?? 0
 }
 
+/**
+ * Text size: ⌘/Ctrl `=`, `-` and `0`.
+ *
+ * Applies the saved level once settings arrive, then listens for the
+ * shortcuts. The zoom itself goes straight to the webview; the setting only
+ * follows so it is there next launch.
+ */
+function useZoomHotkeys() {
+  const { zoom, setZoom, isLoading } = useSettings()
+
+  useEffect(() => {
+    if (!isLoading) applyZoom(zoom)
+  }, [zoom, isLoading])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const next = zoomForKey(event, zoom)
+      if (next === null) return
+      event.preventDefault()
+      if (next !== zoom) setZoom(next)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [zoom, setZoom])
+}
+
 export function Shell() {
   const { isLoading, activeEnvironment, settings } = useSettings()
   const nav = settings?.developerMode ? [...NAV, DEV_NAV] : NAV
   useWatchEvents()
+  useZoomHotkeys()
   const unread = useUnreadHits()
 
   if (isLoading) {
@@ -152,7 +181,7 @@ export function Shell() {
 
   return (
     <div className="flex h-full flex-col bg-surface-0">
-      <header className="flex h-11 shrink-0 items-center gap-3 border-b border-edge bg-surface-1 px-3">
+      <header className="chrome-app flex h-11 shrink-0 items-center gap-3 border-b border-edge bg-surface-1 px-3">
         <nav className="flex items-center gap-0.5">
           {nav.map(({ to, label, icon: Icon }) => (
             <NavLink
@@ -171,7 +200,7 @@ export function Shell() {
               {label}
               {to === '/watch' && unread > 0 && (
                 <span
-                  className="rounded-full bg-accent px-1.5 text-[10px] font-medium leading-4 text-surface-0"
+                  className="rounded-full bg-accent px-1.5 text-[10px] font-medium leading-4 text-on-accent"
                   title={`${unread} unread hit${unread === 1 ? '' : 's'}`}
                 >
                   {unread > 99 ? '99+' : unread}

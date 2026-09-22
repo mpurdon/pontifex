@@ -89,4 +89,19 @@ impl AppState {
         let settings = self.settings.read().await;
         crate::settings::save(&self.config_dir, &settings)
     }
+
+    /// Change one thing in the settings, persist, and hand back the result.
+    ///
+    /// The light path for display preferences — pane sizes, the time zone,
+    /// the theme. Nothing is invalidated: no credential check, no cache drop,
+    /// no refetch. The full `save_settings` command is for changes to what
+    /// the app talks to.
+    pub async fn update_settings(&self, apply: impl FnOnce(&mut Settings)) -> Result<Settings> {
+        {
+            let mut guard = self.settings.write().await;
+            apply(&mut guard);
+        }
+        self.persist().await?;
+        Ok(self.settings_snapshot().await)
+    }
 }

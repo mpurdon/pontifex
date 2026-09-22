@@ -1,0 +1,87 @@
+/*
+ * Light — the dark theme's palette on paper.
+ *
+ * Same slate family and the same amber accent, with every colour pulled down
+ * in lightness so it still reads on a white surface: the status hues sit
+ * around L 0.55 rather than 0.75, and the accent darkens so dark-on-amber
+ * buttons keep their contrast.
+ */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --surface-0: oklch(0.985 0.003 265);
+  --surface-1: oklch(0.965 0.004 265);
+  --surface-2: oklch(0.935 0.006 265);
+  --surface-3: oklch(0.895 0.008 265);
+
+  --edge: oklch(0.87 0.008 265);
+  --edge-strong: oklch(0.76 0.012 265);
+
+  --ink: oklch(0.22 0.012 265);
+  --ink-muted: oklch(0.42 0.014 265);
+  --ink-faint: oklch(0.58 0.015 265);
+
+  --accent: oklch(0.7 0.15 72);
+  --accent-dim: oklch(0.58 0.13 72);
+  --on-accent: oklch(0.2 0.02 70);
+
+  --ok: oklch(0.55 0.15 155);
+  --warn: oklch(0.6 0.14 80);
+  --danger: oklch(0.55 0.2 25);
+  --info: oklch(0.55 0.13 240);
+  --violet: oklch(0.55 0.18 300);
+  --orange: oklch(0.6 0.16 50);
+
+  --type-string: #a35e16;
+  --type-number: #b37903;
+  --type-boolean: #7f42a6;
+  --type-object: #1f5596;
+  --type-array: #00747a;
+
+  --editor-bg: #f9fafc;
+  --editor-fg: #181b20;
+  --editor-line: #eef0f4;
+  --editor-selection: #add6ff;
+  --editor-gutter-fg: #a1a5ac;
+  --editor-gutter-fg-active: #494d55;
+  --editor-guide: #e0e2e7;
+  --editor-widget-bg: #f2f3f6;
+  --editor-widget-edge: #c8c8c8;
+  --editor-scrollbar: #64646466;
+  --editor-scrollbar-hover: #646464b3;
+  --diff-added: #2ea04333;
+  --diff-removed: #f8514933;
+
+  --overlay: rgb(0 0 0 / 0.35);
+  /* Bars are dark here, so the dealt-with share is hatched out in white. */
+  --chart-hatch: rgb(255 255 255 / 0.55);
+  --thumb-shadow: rgb(0 0 0 / 0.25);
+
+  --r-xs: 0.125rem;
+  --r-sm: 0.25rem;
+  --r-md: 0.375rem;
+  --r-lg: 0.5rem;
+  --r-xl: 0.75rem;
+
+  --font-ui: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-code: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  /* Plain surfaces, system selection colours, headings as written. */
+  --canvas-texture: none;
+  --canvas-texture-size: auto;
+  --chrome-app-texture: none;
+  --chrome-page-texture: none;
+  --chrome-panel-texture: none;
+  --raised-texture: none;
+  --raised-texture-size: auto;
+  --panel-frame: none;
+  --panel-frame-slice: 1;
+  --panel-frame-outset: 0px;
+  --panel-edge: 1px;
+  --panel-gap: 0px;
+  --field-edge-style: solid;
+  --selection-bg: highlight;
+  --selection-ink: highlighttext;
+  --heading-transform: none;
+  --heading-tracking: normal;
+}

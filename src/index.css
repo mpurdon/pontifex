@@ -1,30 +1,42 @@
 @import 'tailwindcss';
 
 /*
- * pontifex's visual language: a dense, dark developer tool. Neutral slate
- * surfaces with a single amber accent, so status colours (red/green/amber for
- * validation and drift) carry meaning rather than competing with the chrome.
+ * Themes.
+ *
+ * Every colour, radius and font the app uses is a token declared here and
+ * valued in one file per theme under `src/theme/`. A theme is selected by the
+ * `data-theme` attribute on `<html>` (see `src/theme/theme-context.tsx`), and
+ * because the mapping below is `inline`, an element can also carry its own
+ * `data-theme` to preview a theme in isolation — the picker in Settings does.
+ *
+ * How to add one is in the README under "Themes".
  */
-@theme {
-  --color-surface-0: oklch(0.18 0.012 265);
-  --color-surface-1: oklch(0.22 0.013 265);
-  --color-surface-2: oklch(0.26 0.014 265);
-  --color-surface-3: oklch(0.31 0.015 265);
+@import './theme/dark.css';
+@import './theme/light.css';
+@import './theme/pontifex.css';
 
-  --color-edge: oklch(0.34 0.016 265);
-  --color-edge-strong: oklch(0.44 0.018 265);
+@theme inline {
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
 
-  --color-ink: oklch(0.94 0.005 265);
-  --color-ink-muted: oklch(0.72 0.012 265);
-  --color-ink-faint: oklch(0.56 0.014 265);
+  --color-edge: var(--edge);
+  --color-edge-strong: var(--edge-strong);
 
-  --color-accent: oklch(0.78 0.15 75);
-  --color-accent-dim: oklch(0.62 0.13 75);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
 
-  --color-ok: oklch(0.75 0.16 155);
-  --color-warn: oklch(0.8 0.15 85);
-  --color-danger: oklch(0.68 0.19 25);
-  --color-info: oklch(0.72 0.13 240);
+  --color-accent: var(--accent);
+  --color-accent-dim: var(--accent-dim);
+  /* Text on an accent fill: a button label, the unread count in the nav. */
+  --color-on-accent: var(--on-accent);
+
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
 
   /*
    * Report statuses that need their own hue.
@@ -34,11 +46,27 @@
    * Purple separates them; orange marks a schema that could not be graded at
    * all, which is a third thing again.
    */
-  --color-violet: oklch(0.68 0.18 300);
-  --color-orange: oklch(0.72 0.17 50);
+  --color-violet: var(--violet);
+  --color-orange: var(--orange);
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  /* JSON value types, shared by the schema tree and the Monaco theme. */
+  --color-type-string: var(--type-string);
+  --color-type-number: var(--type-number);
+  --color-type-boolean: var(--type-boolean);
+  --color-type-object: var(--type-object);
+  --color-type-array: var(--type-array);
+
+  /* The dimming behind a modal. */
+  --color-overlay: var(--overlay);
+
+  --radius-xs: var(--r-xs);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
+
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-code);
 }
 
 html,
@@ -49,13 +77,79 @@ body,
 
 body {
   margin: 0;
-  background: var(--color-surface-0);
-  color: var(--color-ink);
-  font-family: var(--font-sans);
+  background: var(--surface-0);
+  color: var(--ink);
+  font-family: var(--font-ui);
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
   /* A desktop app should not rubber-band. */
   overscroll-behavior: none;
+}
+
+/*
+ * What a theme can change beyond colours, driven by tokens so every theme
+ * values them and none has to know a selector. Layered, so a utility on the
+ * element (`normal-case`, `border-solid`) still wins when a screen needs it.
+ *
+ * The canvas and raised textures go on their surfaces by utility class — the
+ * one place class names are relied on. Plates on the canvas (`.panel`), the
+ * three tiers of chrome (`.chrome-app`, `.chrome-page`, `.chrome-panel`) are
+ * named hooks set by the shared components in `components/ui.tsx`.
+ */
+@layer base {
+  body,
+  .bg-surface-0 {
+    background-image: var(--canvas-texture);
+    background-size: var(--canvas-texture-size);
+  }
+
+  /* The raised surface: a selected row, the active nav item. */
+  .bg-surface-3 {
+    background-image: var(--raised-texture);
+    background-size: var(--raised-texture-size);
+  }
+
+  input,
+  textarea,
+  select {
+    border-style: var(--field-edge-style);
+  }
+
+  ::selection {
+    background: var(--selection-bg);
+    color: var(--selection-ink);
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-transform: var(--heading-transform);
+    letter-spacing: var(--heading-tracking);
+  }
+}
+
+@layer components {
+  /* A plate laid on the canvas: a panel, a dialog. Owns its border so a
+     theme can replace it with a drawn frame (`border-image`) and a shade,
+     and its margin so a theme can hold plates apart. */
+  .panel {
+    margin: var(--panel-gap);
+    border: var(--panel-edge) solid var(--edge);
+    border-image: var(--panel-frame) var(--panel-frame-slice) /
+      calc(var(--panel-edge) + var(--panel-frame-outset)) / var(--panel-frame-outset) round;
+  }
+
+  /* The chrome around content, in three tiers: the app header, a screen's
+     own bar (a toolbar, the Settings title row), and a panel's header. */
+  .chrome-app {
+    background-image: var(--chrome-app-texture);
+  }
+  .chrome-page {
+    background-image: var(--chrome-page-texture);
+  }
+  .chrome-panel {
+    background-image: var(--chrome-panel-texture);
+  }
 }
 
 ::-webkit-scrollbar {
@@ -66,24 +160,24 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-surface-3);
+  background: var(--surface-3);
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-edge-strong);
+  background: var(--edge-strong);
   background-clip: content-box;
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
 .monaco-editor,
 .monaco-editor .overflow-guard {
-  border-radius: 6px;
+  border-radius: var(--r-md);
 }
 
 /*
@@ -148,8 +242,8 @@ body {
   border-radius: 2px;
   background: linear-gradient(
     to right,
-    var(--color-accent) var(--fill, 0%),
-    var(--color-surface-3) var(--fill, 0%)
+    var(--accent) var(--fill, 0%),
+    var(--surface-3) var(--fill, 0%)
   );
 }
 
@@ -167,13 +261,13 @@ body {
   width: var(--thumb-w);
   height: var(--thumb-w);
   border-radius: 50%;
-  background: var(--color-ink);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  background: var(--ink);
+  box-shadow: 0 1px 4px var(--thumb-shadow);
   pointer-events: none;
 }
 
 .ladder-slider input[type='range']:focus-visible ~ .ladder-slider-thumb {
-  outline: 2px solid color-mix(in srgb, var(--color-accent) 60%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
   outline-offset: 2px;
 }
 
@@ -183,10 +277,10 @@ body {
   right: 0;
   top: 14px;
   height: 10px;
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-code, ui-monospace, monospace);
   font-size: 8px;
   line-height: 10px;
-  color: var(--color-ink-faint);
+  color: var(--ink-faint);
 }
 
 .ladder-slider-scale span {

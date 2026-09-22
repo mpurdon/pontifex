@@ -157,7 +157,7 @@ export function ConfirmSaveDialog({
             <ModalTitle tone={requiresAcknowledgement ? 'danger' : undefined}>
               {requiresAcknowledgement && <AlertTriangle className="size-4" />}
               {isNew ? 'Create in' : 'Update'}{' '}
-              <span className="font-mono">{environmentLabel}</span>
+              <span className="font-mono normal-case">{environmentLabel}</span>
             </ModalTitle>
             <ModalDescription>
               {isNew ? 'Creating' : 'Saving a new version of'}{' '}

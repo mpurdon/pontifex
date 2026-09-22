@@ -16,7 +16,7 @@ type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
 
 const buttonStyles: Record<ButtonVariant, string> = {
   primary:
-    'bg-accent text-surface-0 hover:bg-accent/90 font-medium disabled:bg-accent/40',
+    'bg-accent text-on-accent hover:bg-accent/90 font-medium disabled:bg-accent/40',
   secondary:
     'bg-surface-2 text-ink hover:bg-surface-3 border border-edge disabled:text-ink-faint',
   ghost: 'text-ink-muted hover:text-ink hover:bg-surface-2',
@@ -145,7 +145,7 @@ export function Checkbox({
       <input
         type="checkbox"
         {...props}
-        className="size-3.5 accent-[var(--color-accent)]"
+        className="size-3.5 accent-accent"
       />
       {label}
     </label>
@@ -170,12 +170,12 @@ export function Panel({
   return (
     <section
       className={cn(
-        'flex min-h-0 flex-col overflow-hidden rounded-lg border border-edge bg-surface-1',
+        'panel flex min-h-0 flex-col overflow-hidden rounded-lg bg-surface-1',
         className,
       )}
     >
       {(title || actions) && (
-        <header className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-edge px-3">
+        <header className="chrome-panel flex h-9 shrink-0 items-center justify-between gap-2 border-b border-edge px-3">
           <h2 className="truncate text-xs font-semibold text-ink">{title}</h2>
           {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
         </header>
@@ -215,12 +215,13 @@ export function Modal({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/60" />
+        <Dialog.Overlay className="fixed inset-0 bg-overlay" />
         <Dialog.Content
           style={{ width }}
           className={cn(
-            'fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-lg border bg-surface-1 shadow-2xl',
-            tone === 'danger' ? 'border-danger/50' : 'border-edge',
+            // `m-0`: a plate margin would nudge a centred dialog off centre.
+            'panel m-0 fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-surface-1 shadow-2xl',
+            tone === 'danger' && 'border-danger/50',
             className,
           )}
         >
@@ -368,7 +369,7 @@ export function Toolbar({
   return (
     <div
       className={cn(
-        'flex shrink-0 flex-wrap items-center gap-2 border-b border-edge bg-surface-1 px-3 py-2',
+        'chrome-page flex shrink-0 flex-wrap items-center gap-2 border-b border-edge bg-surface-1 px-3 py-2',
         className,
       )}
     >

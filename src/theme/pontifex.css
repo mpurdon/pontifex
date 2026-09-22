@@ -1,0 +1,120 @@
+/*
+ * Pontifex — the classic blueprint.
+ *
+ * Cobalt drafting paper with a ruled grid, and everything on it inked by
+ * hand. Panels are plates laid over the paper: a heavy, slightly wandering
+ * ink frame, and a hatched drop shadow down and to the right — the drafting
+ * convention for what sits above the sheet. Chrome is textured to read as a
+ * different material from the content, with a different hand for each tier:
+ * the app header is section-hatched, a screen's own bar is ruled like the
+ * lines of a title block, and a panel's header is a plain darker band. Form
+ * fields are ruled with dashed fill-in lines. The dim behind a dialog is a
+ * plain tint: a pattern over the grid moirés. The "accent" is the pale cyan-white a highlighted
+ * callout gets on a cyanotype. Status colours are pastels rather than
+ * saturated hues: on this blue, a full-strength red or green vibrates.
+ */
+[data-theme='pontifex'] {
+  color-scheme: dark;
+
+  --surface-0: oklch(0.42 0.13 262);
+  --surface-1: oklch(0.4 0.125 262);
+  --surface-2: oklch(0.47 0.115 262);
+  --surface-3: oklch(0.54 0.1 262);
+
+  --edge: oklch(0.96 0.02 240 / 0.7);
+  --edge-strong: oklch(0.96 0.02 240 / 0.95);
+
+  --ink: oklch(0.985 0.01 240);
+  --ink-muted: oklch(0.9 0.03 240);
+  --ink-faint: oklch(0.78 0.05 245);
+
+  --accent: oklch(0.9 0.09 200);
+  --accent-dim: oklch(0.78 0.09 200);
+  --on-accent: oklch(0.36 0.13 262);
+
+  --ok: oklch(0.85 0.17 150);
+  --warn: oklch(0.88 0.16 90);
+  --danger: oklch(0.8 0.16 20);
+  --info: oklch(0.87 0.1 220);
+  --violet: oklch(0.88 0.1 320);
+  --orange: oklch(0.9 0.07 60);
+
+  --type-string: #f4e8bb;
+  --type-number: #ffd4b0;
+  --type-boolean: #f5c2ff;
+  --type-object: #a2daf6;
+  --type-array: #96e8ec;
+
+  --editor-bg: #2a4f96;
+  --editor-fg: #f4fbff;
+  --editor-line: #3b5ea1;
+  --editor-selection: #f4fbff55;
+  --editor-gutter-fg: #9dbbd6;
+  --editor-gutter-fg-active: #f4fbff;
+  --editor-guide: #5171ac;
+  --editor-widget-bg: #234993;
+  --editor-widget-edge: #8ca7ca;
+  --editor-scrollbar: #5171ac99;
+  --editor-scrollbar-hover: #6c86b7cc;
+  --diff-added: #70ec9033;
+  --diff-removed: #ff909233;
+
+  --overlay: oklch(0.2 0.08 262 / 0.6);
+  --chart-hatch: rgb(0 0 0 / 0.45);
+  --thumb-shadow: rgb(0 0 0 / 0.5);
+
+  /* Drafted, not rounded. */
+  --r-xs: 1px;
+  --r-sm: 1px;
+  --r-md: 2px;
+  --r-lg: 3px;
+  --r-xl: 4px;
+
+  --font-ui: 'Avenir Next', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-code: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  /* The ruled grid on the paper: a fine line every 8px, a heavier one every
+     80px. Only the canvas — plates laid on it are solid. */
+  --grid-minor: oklch(1 0 0 / 0.07);
+  --grid-major: oklch(1 0 0 / 0.14);
+  --canvas-texture: linear-gradient(var(--grid-major) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-major) 1px, transparent 1px),
+    linear-gradient(var(--grid-minor) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px);
+  --canvas-texture-size: 80px 80px, 80px 80px, 8px 8px, 8px 8px;
+
+  /* The three chrome tiers, and stippling on raised surfaces. */
+  --chrome-app-texture: repeating-linear-gradient(
+    45deg,
+    transparent 0 5px,
+    oklch(1 0 0 / 0.07) 5px 6px
+  );
+  --chrome-page-texture: repeating-linear-gradient(
+    0deg,
+    transparent 0 3px,
+    oklch(1 0 0 / 0.08) 3px 4px
+  );
+  --chrome-panel-texture: linear-gradient(oklch(0 0 0 / 0.14), oklch(0 0 0 / 0.14));
+  --raised-texture: radial-gradient(oklch(1 0 0 / 0.16) 0.6px, transparent 0.7px);
+  --raised-texture-size: 4px 4px;
+
+  /* The plate frame: a 96×96 SVG, nine-sliced at 24 and drawn at half scale.
+     Outer 6px of each slice is the hatched shade (right and bottom only),
+     then the line inked twice — a heavy pass and a lighter one that wanders
+     off it — then a gap before the content. The hatch is explicit strokes
+     rather than an SVG <pattern>: WebKit breaks a rotated pattern into
+     dashes at its tile seams. */
+  --panel-frame: url("data:image/svg+xml,%3Csvg xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg' width%3D'96' height%3D'96' viewBox%3D'0 0 96 96'%3E%3Cdefs%3E%3CclipPath id%3D's'%3E%3Crect x%3D'87' y%3D'21' width%3D'9' height%3D'75'%2F%3E%3Crect x%3D'21' y%3D'87' width%3D'75' height%3D'9'%2F%3E%3C%2FclipPath%3E%3C%2Fdefs%3E%3Cpath d%3D'M-96 96 L0 0 M-90 96 L6 0 M-84 96 L12 0 M-78 96 L18 0 M-72 96 L24 0 M-66 96 L30 0 M-60 96 L36 0 M-54 96 L42 0 M-48 96 L48 0 M-42 96 L54 0 M-36 96 L60 0 M-30 96 L66 0 M-24 96 L72 0 M-18 96 L78 0 M-12 96 L84 0 M-6 96 L90 0 M0 96 L96 0 M6 96 L102 0 M12 96 L108 0 M18 96 L114 0 M24 96 L120 0 M30 96 L126 0 M36 96 L132 0 M42 96 L138 0 M48 96 L144 0 M54 96 L150 0 M60 96 L156 0 M66 96 L162 0 M72 96 L168 0 M78 96 L174 0 M84 96 L180 0 M90 96 L186 0 M96 96 L192 0 M102 96 L198 0 M108 96 L204 0 M114 96 L210 0 M120 96 L216 0 M126 96 L222 0 M132 96 L228 0 M138 96 L234 0 M144 96 L240 0 M150 96 L246 0 M156 96 L252 0 M162 96 L258 0 M168 96 L264 0 M174 96 L270 0 M180 96 L276 0 M186 96 L282 0 M192 96 L288 0' clip-path%3D'url(%23s)' fill%3D'none' stroke%3D'%23f4fbff' stroke-width%3D'1.4' stroke-opacity%3D'0.8'%2F%3E%3Cpath d%3D'M15 15.4C30 14.2 50 16.1 81 14.8C82.4 30 80.3 55 81.3 81C60 82.4 35 80.4 15.2 81.2C13.9 60 16.2 35 15 15.4Z' fill%3D'none' stroke%3D'%23f4fbff' stroke-width%3D'3.6' stroke-linejoin%3D'round' stroke-opacity%3D'0.95'%2F%3E%3Cpath d%3D'M14.2 14.4C35 15.9 55 13.4 82 15.6C80.6 35 82.9 60 80.4 81.9C55 80.2 30 82.6 14.6 80.4C15.8 55 13.6 30 14.2 14.4Z' fill%3D'none' stroke%3D'%23f4fbff' stroke-width%3D'1.4' stroke-linejoin%3D'round' stroke-opacity%3D'0.55'%2F%3E%3C%2Fsvg%3E");
+  --panel-frame-slice: 24;
+  --panel-frame-outset: 6px;
+  --panel-edge: 6px;
+  /* Room around each plate, so the shade has canvas to fall on. */
+  --panel-gap: 6px;
+  --field-edge-style: dashed;
+
+  /* White-out selection, and drafting lettering for headings. */
+  --selection-bg: var(--ink);
+  --selection-ink: var(--surface-0);
+  --heading-transform: uppercase;
+  --heading-tracking: 0.08em;
+}

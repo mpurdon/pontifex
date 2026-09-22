@@ -11,6 +11,8 @@ import editorWorker from 'monaco-editor/editor/editor.worker.js?worker'
 import jsonWorker from 'monaco-editor/language/json/json.worker.js?worker'
 import { useEffect, useMemo, useRef } from 'react'
 import type { Finding } from '@/lib/types'
+import { buildMonacoTheme } from '@/theme/monaco'
+import { useTheme, type ThemeDefinition } from '@/theme/theme-context'
 
 /**
  * Monaco setup for a desktop app.
@@ -28,28 +30,36 @@ self.MonacoEnvironment = {
   },
 }
 
-const THEME = 'pontifex-dark'
+/**
+ * Monaco themes, built from the theme CSS the first time each is needed.
+ *
+ * The tokens are read off a probe element carrying the theme's `data-theme`,
+ * so the editor's colours are the CSS file's — no second palette to keep in
+ * step. Registered under the theme's own id; none collides with Monaco's
+ * built-in `vs`/`vs-dark`/`hc-*`.
+ */
+const defined = new Set<string>()
 
-monaco.editor.defineTheme(THEME, {
-  base: 'vs-dark',
-  inherit: true,
-  rules: [
-    { token: 'string.key.json', foreground: 'a8c7fa' },
-    { token: 'string.value.json', foreground: 'e8c07d' },
-    { token: 'number', foreground: 'd19a66' },
-    { token: 'keyword.json', foreground: 'c678dd' },
-  ],
-  colors: {
-    'editor.background': '#1c1e26',
-    'editorGutter.background': '#1c1e26',
-    'editor.lineHighlightBackground': '#24262f',
-    'editorLineNumber.foreground': '#5a5e70',
-    'editorLineNumber.activeForeground': '#9aa0b5',
-    'editorIndentGuide.background1': '#2a2d38',
-    'diffEditor.insertedTextBackground': '#2ea04326',
-    'diffEditor.removedTextBackground': '#f8514926',
-  },
-})
+function ensureMonacoTheme(theme: ThemeDefinition): string {
+  if (!defined.has(theme.id)) {
+    const probe = document.createElement('div')
+    probe.dataset.theme = theme.id
+    document.body.appendChild(probe)
+    const style = getComputedStyle(probe)
+    monaco.editor.defineTheme(
+      theme.id,
+      buildMonacoTheme(theme.scheme, (token) => style.getPropertyValue(token).trim()),
+    )
+    probe.remove()
+    defined.add(theme.id)
+  }
+  return theme.id
+}
+
+/** The Monaco theme name for whatever theme the app is currently drawing. */
+function useMonacoTheme(): string {
+  return ensureMonacoTheme(useTheme().theme)
+}
 
 const baseOptions: monaco.editor.IStandaloneEditorConstructionOptions = {
   fontSize: 12,
@@ -140,6 +150,7 @@ export function JsonEditor({
   height?: string | number
 }) {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
+  const theme = useMonacoTheme()
 
   // Re-marking on every findings change keeps the gutter in step with the
   // validator, which runs debounced as the user types.
@@ -157,7 +168,7 @@ export function JsonEditor({
     <Editor
       height={height}
       language="json"
-      theme={THEME}
+      theme={theme}
       value={value}
       options={options}
       onChange={(next) => onChange?.(next ?? '')}
@@ -203,12 +214,13 @@ export function JsonDiff({
   // `onMount` runs once, so it would capture the first render's callback.
   const reachedEnd = useRef(onReachedEnd)
   reachedEnd.current = onReachedEnd
+  const theme = useMonacoTheme()
 
   const diff = (
     <DiffEditor
       height={height}
       language="json"
-      theme={THEME}
+      theme={theme}
       original={original}
       modified={modified}
       options={{

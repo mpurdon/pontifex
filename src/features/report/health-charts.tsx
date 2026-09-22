@@ -30,8 +30,8 @@ function Panel({
   children: ReactNode
 }) {
   return (
-    <section className="flex min-w-0 flex-col rounded-md border border-edge bg-surface-1">
-      <header className="flex items-baseline gap-2 border-b border-edge px-3 py-1.5">
+    <section className="panel flex min-w-0 flex-col rounded-md bg-surface-1">
+      <header className="chrome-panel flex items-baseline gap-2 border-b border-edge px-3 py-1.5">
         <h3 className="text-[11px] font-semibold text-ink">{title}</h3>
         {subtitle && <span className="text-[10px] text-ink-faint">{subtitle}</span>}
         {right && <span className="ml-auto text-[10px] text-ink-faint">{right}</span>}
@@ -135,7 +135,7 @@ export function StatusBar({
                   style={{
                     width: `${doneShare}%`,
                     backgroundImage:
-                      'repeating-linear-gradient(135deg, transparent 0 3px, rgba(0,0,0,0.55) 3px 6px)',
+                      'repeating-linear-gradient(135deg, transparent 0 3px, var(--chart-hatch) 3px 6px)',
                   }}
                 />
               )}

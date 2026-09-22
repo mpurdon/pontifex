@@ -57,12 +57,11 @@ pub async fn save_panel_sizes(
     id: String,
     sizes: Vec<f64>,
 ) -> Result<Settings> {
-    {
-        let mut guard = state.settings.write().await;
-        guard.panel_sizes.insert(id, sizes);
-    }
-    state.persist().await?;
-    Ok(state.settings_snapshot().await)
+    state
+        .update_settings(|s| {
+            s.panel_sizes.insert(id, sizes);
+        })
+        .await
 }
 
 /// Switch the zone times are displayed in.
@@ -72,12 +71,24 @@ pub async fn save_panel_sizes(
 /// Logs screen must not send it back to CloudWatch for the same events.
 #[tauri::command]
 pub async fn set_time_zone(state: State<'_, AppState>, zone: TimeZone) -> Result<Settings> {
-    {
-        let mut guard = state.settings.write().await;
-        guard.time_zone = zone;
+    state.update_settings(|s| s.time_zone = zone).await
+}
+
+/// Switch the UI theme. Light path, like `set_time_zone`: a look must not
+/// send every screen back to AWS.
+#[tauri::command]
+pub async fn set_theme(state: State<'_, AppState>, theme: String) -> Result<Settings> {
+    state.update_settings(|s| s.theme = theme).await
+}
+
+/// Remember the text size. The webview applies the zoom itself; this only
+/// makes it survive a restart.
+#[tauri::command]
+pub async fn set_zoom(state: State<'_, AppState>, zoom: f64) -> Result<Settings> {
+    if !(0.2..=5.0).contains(&zoom) {
+        return Err(Error::Invalid(format!("Zoom {zoom} is out of range")));
     }
-    state.persist().await?;
-    Ok(state.settings_snapshot().await)
+    state.update_settings(|s| s.zoom = zoom).await
 }
 
 fn validate_settings(settings: &Settings) -> Result<()> {

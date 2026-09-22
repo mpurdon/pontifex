@@ -397,10 +397,28 @@ pub struct Settings {
     /// either way; this only changes the rendering.
     #[serde(default)]
     pub time_zone: TimeZone,
+    /// The UI theme: an id the frontend's theme registry knows, or `system`.
+    ///
+    /// Deliberately a string rather than an enum. Themes are defined entirely
+    /// in CSS and TypeScript, and the frontend falls back to its default for
+    /// an id it does not recognise, so adding one never touches this file.
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// Webview zoom factor: the text size, 1.0 being native.
+    #[serde(default = "default_zoom")]
+    pub zoom: f64,
 }
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+fn default_theme() -> String {
+    "dark".to_string()
+}
+
+fn default_zoom() -> f64 {
+    1.0
 }
 
 /// The zone timestamps are displayed in.
@@ -456,6 +474,8 @@ impl Settings {
             developer_mode: false,
             log_level: default_log_level(),
             time_zone: TimeZone::default(),
+            theme: default_theme(),
+            zoom: default_zoom(),
         }
     }
 }

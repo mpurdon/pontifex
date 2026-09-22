@@ -15,13 +15,13 @@ import { cn } from '@/components/ui'
 
 /** One colour per type, so shape is readable by scanning rather than reading. */
 const TYPE_STYLES: Record<NodeType, string> = {
-  string: 'text-[#e8c07d] bg-[#e8c07d]/10',
-  number: 'text-[#d19a66] bg-[#d19a66]/10',
-  integer: 'text-[#d19a66] bg-[#d19a66]/10',
-  boolean: 'text-[#c678dd] bg-[#c678dd]/10',
-  object: 'text-[#8fb3f5] bg-[#8fb3f5]/10',
-  array: 'text-[#56b6c2] bg-[#56b6c2]/10',
-  ref: 'text-[#8fb3f5] bg-[#8fb3f5]/10',
+  string: 'text-type-string bg-type-string/10',
+  number: 'text-type-number bg-type-number/10',
+  integer: 'text-type-number bg-type-number/10',
+  boolean: 'text-type-boolean bg-type-boolean/10',
+  object: 'text-type-object bg-type-object/10',
+  array: 'text-type-array bg-type-array/10',
+  ref: 'text-type-object bg-type-object/10',
   unknown: 'text-ink-faint bg-surface-3',
 }
 
@@ -66,9 +66,9 @@ const CHANGE_STYLES: Record<
 
 /** Glow colour per change kind, matching the row's own border. */
 const GLOW_TINTS: Record<ChangeStatus, string> = {
-  added: 'color-mix(in oklch, var(--color-ok) 35%, transparent)',
-  removed: 'color-mix(in oklch, var(--color-danger) 35%, transparent)',
-  changed: 'color-mix(in oklch, var(--color-warn) 35%, transparent)',
+  added: 'color-mix(in oklch, var(--ok) 35%, transparent)',
+  removed: 'color-mix(in oklch, var(--danger) 35%, transparent)',
+  changed: 'color-mix(in oklch, var(--warn) 35%, transparent)',
 }
 
 function TypeBadge({ node }: { node: SchemaNode }) {
