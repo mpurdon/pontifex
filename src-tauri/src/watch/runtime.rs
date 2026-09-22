@@ -12,11 +12,13 @@
 //! exponentially and keeps trying.
 
 use super::pattern::{self, Compiled};
-use super::{Watch, WatchHit, WatchMarkKind};
+use super::{HitGrade, Watch, WatchHit, WatchMarkKind};
 use crate::aws::clients::map_sdk_error;
 use crate::error::{Error, Result};
 use crate::events_cache::now_ms;
 use crate::logging::cat;
+use crate::schema::events::{self, EventCheckReport, IssueSeverity};
+use crate::schema::model::{self, EventIdentity};
 use crate::state::AppState;
 use aws_config::SdkConfig;
 use futures::future::join_all;
@@ -119,10 +121,27 @@ struct Live {
     started_at: Option<i64>,
 }
 
+/// A schema as the grader last saw it, or the fact that there is none.
+#[derive(Clone)]
+struct SchemaEntry {
+    fetched_at: i64,
+    /// The document and the type its events are checked against; `None`
+    /// when the registry has no schema by that name.
+    found: Option<(Value, String)>,
+}
+
+/// How long a fetched schema is trusted for grading. A save through this app
+/// clears the cache outright; this bounds staleness from edits made elsewhere.
+const SCHEMA_TTL_MS: i64 = 10 * 60 * 1000;
+
 #[derive(Default)]
 pub struct Watcher {
     tasks: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
     live: RwLock<HashMap<String, Live>>,
+    /// Schemas fetched for grading, keyed by environment and name. Grading
+    /// happens per hit, and a busy source would otherwise describe the same
+    /// schema on every poll.
+    schemas: tokio::sync::Mutex<HashMap<String, SchemaEntry>>,
     /// One per environment: poked by "poll now" to cut the sleep short.
     wake: Mutex<HashMap<String, Arc<Notify>>>,
     /// Start and stop take turns: two "start" clicks landing together must
@@ -133,6 +152,57 @@ pub struct Watcher {
 impl Watcher {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Forget every cached schema, so the next hit grades against what is
+    /// registered now. Called after a schema is written or deleted.
+    pub async fn forget_schemas(&self) {
+        self.schemas.lock().await.clear();
+    }
+
+    /// The schema a hit's events are graded against, fetched at most once per
+    /// TTL. `Ok(None)` is a registry that has no such schema — cached too,
+    /// because an unregistered type fires as often as a registered one.
+    async fn schema_for_grading(
+        &self,
+        client: &aws_sdk_schemas::Client,
+        env_id: &str,
+        registry: &str,
+        name: &str,
+    ) -> Result<Option<(Value, String)>> {
+        let key = format!("{env_id}\u{1f}{name}");
+        let now = now_ms();
+        if let Some(entry) = self.schemas.lock().await.get(&key) {
+            if now - entry.fetched_at < SCHEMA_TTL_MS {
+                return Ok(entry.found.clone());
+            }
+        }
+        let found = match client
+            .describe_schema()
+            .registry_name(registry)
+            .schema_name(name)
+            .send()
+            .await
+            .map_err(map_sdk_error)
+        {
+            Ok(described) => {
+                let content: Value = serde_json::from_str(described.content().unwrap_or("{}"))?;
+                let type_name = model::detail_type_name(&content).ok_or_else(|| {
+                    Error::Invalid(format!("{name}: the envelope's `detail` has no $ref"))
+                })?;
+                Some((content, type_name))
+            }
+            Err(Error::NotFound(_)) => None,
+            Err(e) => return Err(e),
+        };
+        self.schemas.lock().await.insert(
+            key,
+            SchemaEntry {
+                fetched_at: now,
+                found: found.clone(),
+            },
+        );
+        Ok(found)
     }
 
     fn is_running(&self, env_id: &str) -> bool {
@@ -645,6 +715,8 @@ async fn pass(
                     detail_type: text("detail-type"),
                     event: envelope.clone(),
                     backfill: backfill_since.is_some_and(|since| timestamp < since),
+                    grade: None,
+                    headline: None,
                 });
             }
         }
@@ -675,6 +747,8 @@ async fn pass(
     seen.retain(|_, ts| *ts >= from - OVERLAP_MS);
 
     hits.sort_by_key(|h| std::cmp::Reverse(h.timestamp));
+    let cfg = &connection.as_ref().expect("set above").cfg;
+    grade_hits(state, cfg, env_id, &env.registry_name, &mut hits).await;
     let fresh = state.watch.push_hits(hits).await?;
     if !fresh.is_empty() {
         if let Err(e) = app.emit(EVENT_HITS, &fresh) {
@@ -695,6 +769,98 @@ async fn pass(
         elapsed_ms: started.elapsed().as_millis() as u64,
         note,
     })
+}
+
+/// Grade every hit against its registered schema, in place.
+///
+/// The schema is looked up under the names the registry might hold it as:
+/// the exact `source@detail-type`, then that name with the characters a
+/// registry name cannot carry replaced, then the PascalCase title EventBridge's
+/// own codegen would have used. A registry that has none of them is `Missing`.
+/// Nothing here fails the pass — a hit that cannot be graded is `Unknown`, and
+/// the reason is logged.
+async fn grade_hits(
+    state: &AppState,
+    cfg: &SdkConfig,
+    env_id: &str,
+    registry: &str,
+    hits: &mut [WatchHit],
+) {
+    if hits.is_empty() {
+        return;
+    }
+    let client = aws_sdk_schemas::Client::new(cfg);
+    for hit in hits.iter_mut() {
+        let (grade, headline) = grade_hit(state, &client, env_id, registry, hit).await;
+        hit.grade = Some(grade);
+        hit.headline = headline;
+    }
+}
+
+async fn grade_hit(
+    state: &AppState,
+    client: &aws_sdk_schemas::Client,
+    env_id: &str,
+    registry: &str,
+    hit: &WatchHit,
+) -> (HitGrade, Option<String>) {
+    let (Some(source), Some(detail_type)) = (&hit.source, &hit.detail_type) else {
+        return (HitGrade::Unknown, Some("The event carries no source or detail-type".into()));
+    };
+    let Some(detail) = hit.event.get("detail") else {
+        return (HitGrade::Unknown, Some("The event has no `detail` to check".into()));
+    };
+    let identity = EventIdentity {
+        source: source.clone(),
+        detail_type: detail_type.clone(),
+    };
+    let exact = identity.schema_name();
+    let mut candidates = vec![exact.clone()];
+    let sanitized = model::sanitize_schema_name(&exact);
+    if sanitized != exact {
+        candidates.push(sanitized);
+    }
+    candidates.push(format!("{}@{}", identity.source, identity.detail_title()));
+
+    for name in candidates {
+        match state
+            .watcher
+            .schema_for_grading(client, env_id, registry, &name)
+            .await
+        {
+            Ok(Some((document, type_name))) => {
+                return match events::check_events(&document, &type_name, std::slice::from_ref(detail)) {
+                    Ok(report) => grade_for(&report),
+                    Err(e) => (HitGrade::Unknown, Some(e.to_string())),
+                };
+            }
+            Ok(None) => continue,
+            Err(e) => {
+                lwarn!(cat::WATCH, "could not grade {exact}: {e}");
+                return (HitGrade::Unknown, Some(e.to_string()));
+            }
+        }
+    }
+    (HitGrade::Missing, Some("No schema is registered for this event type".into()))
+}
+
+/// The grade a single event's report earns, and the line worth showing for it.
+fn grade_for(report: &EventCheckReport) -> (HitGrade, Option<String>) {
+    // The issues are already ranked, so the first one that matters is the
+    // headline — the same choice the Health report makes.
+    let headline = |worth: fn(&events::Issue) -> bool| {
+        report.issues.iter().find(|i| worth(i)).map(|i| i.summary.clone())
+    };
+    if report.failed > 0 {
+        (HitGrade::Failing, headline(|i| i.rejects).or_else(|| headline(|_| true)))
+    } else if report.issues.iter().any(|i| i.severity != IssueSeverity::Info) {
+        (
+            HitGrade::Drifting,
+            headline(|i| i.severity != IssueSeverity::Info),
+        )
+    } else {
+        (HitGrade::Ok, None)
+    }
 }
 
 /// What one call read, and whether it got to the end of the window.
@@ -842,6 +1008,30 @@ mod tests {
     use crate::watch::{WatchCondition, WatchOp};
     use serde_json::json;
 
+    #[test]
+    fn grades_a_report_the_way_health_does() {
+        use crate::schema::events::check_events;
+        use serde_json::json;
+        let doc = json!({ "components": { "schemas": { "T": {
+            "type": "object",
+            "required": ["id"],
+            "properties": { "id": { "type": "string" }, "n": { "type": "integer" } }
+        }}}});
+        let ok = check_events(&doc, "T", &[json!({ "id": "a", "n": 1 })]).unwrap();
+        assert_eq!(grade_for(&ok), (HitGrade::Ok, None));
+
+        let failing = check_events(&doc, "T", &[json!({ "n": 1 })]).unwrap();
+        let (grade, headline) = grade_for(&failing);
+        assert_eq!(grade, HitGrade::Failing);
+        assert!(headline.unwrap().contains("id"));
+
+        // Blank required: accepted by the schema, so drifting rather than failing.
+        let drifting = check_events(&doc, "T", &[json!({ "id": "" })]).unwrap();
+        let (grade, headline) = grade_for(&drifting);
+        assert_eq!(grade, HitGrade::Drifting);
+        assert!(headline.unwrap().contains("blank"));
+    }
+
     fn hit(event: Value) -> WatchHit {
         WatchHit {
             id: "h".into(),
@@ -862,6 +1052,8 @@ mod tests {
                 .map(str::to_string),
             event,
             backfill: false,
+            grade: None,
+            headline: None,
         }
     }
 

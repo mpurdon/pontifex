@@ -11,6 +11,9 @@ import {
   RotateCcw,
   Wand2,
   X,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
 } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type {
@@ -37,6 +40,7 @@ import {
   type StatusStyle,
 } from './status'
 import { DriftBreakdown, StatusBar, TrafficChart } from './health-charts'
+import { DEFAULT_SORT, driftOf, nextSort, sortRows, type SortKey, type SortState } from './sort'
 import { WINDOWS, formatAge, formatWindow } from '@/lib/format'
 import { useLoginForEnvironment } from '@/app/login-dialog'
 import { useWorkbench } from '@/features/schemas/workbench-context'
@@ -266,6 +270,7 @@ export function ReportPage() {
         typeMismatches: 0,
         enumDrift: 0,
         missingRequired: 0,
+        emptyRequired: 0,
         status: 'noTraffic',
         headline: 'Published but undocumented — open to draft a schema from its own traffic',
         version: null,
@@ -299,16 +304,18 @@ export function ReportPage() {
    */
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [filing, setFiling] = useState(false)
+  const [sort, setSort] = useState<SortState>(DEFAULT_SORT)
 
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase()
-    return rows.filter((row) => {
+    const shown = rows.filter((row) => {
       if (hideDone && row.addressed) return false
       if (!showAll && !active.has(row.status)) return false
       if (!needle) return true
       return row.name.toLowerCase().includes(needle)
     })
-  }, [rows, filter, active, showAll, hideDone])
+    return sortRows(shown, sort)
+  }, [rows, filter, active, showAll, hideDone, sort])
 
   const reportAt = report?.generatedAt
   const toggleDone = useCallback(
@@ -399,7 +406,7 @@ export function ReportPage() {
         </div>
       </Toolbar>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3 *:shrink-0">
         {run.isError && <ErrorBox error={run.error} {...credentials} />}
 
         {!report && !run.isPending && !run.isError && (
@@ -622,12 +629,23 @@ export function ReportPage() {
                         title="Select every schema with something to file"
                       />
                     </th>
-                    <th className="whitespace-nowrap px-2 py-1 font-medium">Status</th>
-                    <th className="whitespace-nowrap px-2 py-1 font-medium">Schema</th>
-                    <th className="whitespace-nowrap px-2 py-1 text-right font-medium">
-                      Pass/Fail
-                    </th>
-                    <th className="whitespace-nowrap px-2 py-1 font-medium">Drift</th>
+                    <SortHeader label="Status" sortKey="status" sort={sort} onSort={setSort} />
+                    <SortHeader label="Schema" sortKey="name" sort={sort} onSort={setSort} />
+                    <SortHeader
+                      label="Pass/Fail"
+                      sortKey="failed"
+                      sort={sort}
+                      onSort={setSort}
+                      align="right"
+                      title="Sort by failures"
+                    />
+                    <SortHeader
+                      label="Drift"
+                      sortKey="drift"
+                      sort={sort}
+                      onSort={setSort}
+                      title="Sort by total drift"
+                    />
                     <th className="w-full px-2 py-1 font-medium">Detail</th>
                   </tr>
                 </thead>
@@ -661,6 +679,45 @@ export function ReportPage() {
   )
 }
 
+/** A column header that sorts the table; the arrow says which way. */
+function SortHeader({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  align = 'left',
+  title,
+}: {
+  label: string
+  sortKey: SortKey
+  sort: SortState
+  onSort: (next: SortState) => void
+  align?: 'left' | 'right'
+  title?: string
+}) {
+  const isActive = sort.key === sortKey
+  const Arrow = !isActive ? ArrowUpDown : sort.dir === 'asc' ? ArrowUp : ArrowDown
+  return (
+    <th
+      className={cn('whitespace-nowrap px-2 py-1 font-medium', align === 'right' && 'text-right')}
+      aria-sort={isActive ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(nextSort(sort, sortKey))}
+        title={title ?? `Sort by ${label.toLowerCase()}`}
+        className={cn(
+          '-mx-1 inline-flex items-center gap-1 rounded px-1 hover:text-ink',
+          isActive && 'text-ink',
+        )}
+      >
+        {label}
+        <Arrow className={cn('size-3', !isActive && 'opacity-40')} />
+      </button>
+    </th>
+  )
+}
+
 /**
  * One graded schema.
  *
@@ -685,8 +742,7 @@ const Row = memo(function Row({
 }) {
   const status = STATUS[row.status]
   const Icon = status.icon
-  const drift =
-    row.undeclared + row.typeMismatches + row.enumDrift + row.missingRequired
+  const drift = driftOf(row)
 
   return (
     <tr
@@ -779,6 +835,11 @@ const Row = memo(function Row({
             {row.missingRequired > 0 && (
               <span className="text-warn" title={`${row.missingRequired} required field(s) not always present`}>
                 {row.missingRequired}&nbsp;req
+              </span>
+            )}
+            {row.emptyRequired > 0 && (
+              <span className="text-warn" title={`${row.emptyRequired} required field(s) sent blank`}>
+                {row.emptyRequired}&nbsp;blank
               </span>
             )}
           </span>

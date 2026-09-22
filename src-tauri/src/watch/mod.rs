@@ -194,4 +194,31 @@ pub struct WatchHit {
     /// screen is not empty on arrival. Backfilled hits never notify.
     #[serde(default)]
     pub backfill: bool,
+    /// What the registered schema made of this event's payload, graded as
+    /// the hit was caught. Absent on hits stored before grading existed.
+    #[serde(default)]
+    pub grade: Option<HitGrade>,
+    /// The most useful line about why, when the grade is not `Ok`.
+    #[serde(default)]
+    pub headline: Option<String>,
+}
+
+/// A hit's payload against its schema, in the Health screen's vocabulary.
+///
+/// Graded live so the list can be read for what is broken rather than what
+/// merely happened: a watch on a source you are worried about fires on every
+/// event, and the eye needs somewhere to go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HitGrade {
+    /// Validates, with nothing to report.
+    Ok,
+    /// The schema rejects the payload.
+    Failing,
+    /// Validates, but the payload and the schema disagree somewhere.
+    Drifting,
+    /// No schema is registered for this event type.
+    Missing,
+    /// Could not be graded: no identity, no `detail`, or the registry did not answer.
+    Unknown,
 }

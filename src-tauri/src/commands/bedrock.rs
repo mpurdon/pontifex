@@ -396,7 +396,7 @@ fn plausible(repair: &Repair) -> bool {
     let types = match repair {
         Repair::WidenType { types } | Repair::DeclareField { types, .. } => types,
         Repair::ExtendEnum { values } => return !values.is_empty(),
-        Repair::DropRequired => return true,
+        Repair::DropRequired | Repair::RequireNonEmpty => return true,
     };
     !types.is_empty() && types.iter().all(|t| JSON_TYPES.contains(&t.as_str()))
 }

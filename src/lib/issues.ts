@@ -5,6 +5,7 @@ export const KIND_LABELS: Record<IssueKind, string> = {
   wrongType: 'wrong type',
   outsideEnum: 'value not allowed',
   missingRequired: 'required field missing',
+  emptyRequired: 'required field blank',
   undeclared: 'undeclared field',
   neverSeen: 'never seen',
   rejected: 'rejected',

@@ -18,6 +18,8 @@ export function repairLabel(repair: Repair): string {
         : `Allow ${repair.values.length} values`
     case 'dropRequired':
       return 'Make optional'
+    case 'requireNonEmpty':
+      return 'Require a value'
     case 'declareField':
       return `Declare as ${repair.types.join(' | ')}`
   }

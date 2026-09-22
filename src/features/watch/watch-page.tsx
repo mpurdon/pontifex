@@ -23,9 +23,12 @@ import {
   Bug,
   CheckCircle2,
   ShieldCheck,
+  AlertTriangle,
+  HelpCircle,
+  XCircle,
 } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
-import type { CompiledWatch, Environment, FiledTicket, IpcError, Issue, NotifierOutcome, Watch, WatchCondition, WatchHit, WatchMark, WatchProbe, WatchStatus } from '@/lib/types'
+import type { CompiledWatch, Environment, FiledTicket, IpcError, Issue, NotifierOutcome, HitGrade, Watch, WatchCondition, WatchHit, WatchMark, WatchProbe, WatchStatus } from '@/lib/types'
 import { KIND_LABELS, SEVERITY_TONE, describeSeverity } from '@/lib/issues'
 import { FileTicketDialog, FiledChip } from '@/features/jira/file-ticket-dialog'
 import { formatAge, formatDateTime, formatMoment, formatTime, stringify } from '@/lib/format'
@@ -203,8 +206,18 @@ export function WatchPage() {
    * you can see of it, and a session with nothing to show drops out, unless
    * it is the one running now.
    */
+  // Hits whose payload the schema rejects or disagrees with, or that have no
+  // schema at all — what you are usually watching for.
+  const [problemsOnly, setProblemsOnly] = useState(false)
+  const problemCount = useMemo(
+    () => (hits.data ?? []).filter((h) => !hidden.has(h.watchId) && isProblem(h)).length,
+    [hits.data, hidden],
+  )
+
   const timeline = useMemo<TimelineRow[]>(() => {
-    const visible = (hits.data ?? []).filter((h) => !hidden.has(h.watchId))
+    const visible = (hits.data ?? []).filter(
+      (h) => !hidden.has(h.watchId) && (!problemsOnly || isProblem(h)),
+    )
     const items: Array<{ at: number; order: number; row: TimelineRow }> = visible.map((hit) => ({
       at: hit.timestamp,
       order: 1,
@@ -239,7 +252,7 @@ export function WatchPage() {
     })
     items.sort((a, b) => b.at - a.at || b.order - a.order)
     return items.map((i) => i.row)
-  }, [hits.data, marks.data, hidden, status?.armed, status?.watchingSince])
+  }, [hits.data, marks.data, hidden, status?.armed, status?.watchingSince, problemsOnly])
 
   const arm = useMutation<WatchStatus, IpcError, boolean>({
     mutationFn: (enabled) => ipc.setWatching(enabled, envId),
@@ -483,6 +496,17 @@ export function WatchPage() {
             />
           )}
           {hits.data && hits.data.length > 0 && (
+            <div className="flex items-center gap-3 border-b border-edge bg-surface-1 px-3 py-1.5 text-[10px] text-ink-faint">
+              <Checkbox
+                checked={problemsOnly}
+                onChange={(e) => setProblemsOnly(e.target.checked)}
+                label={`problems only${problemCount > 0 ? ` (${problemCount})` : ''}`}
+                title="Show only hits the schema rejects, disagrees with, or has no schema for"
+              />
+              {problemsOnly && problemCount === 0 && <span>nothing is broken</span>}
+            </div>
+          )}
+          {hits.data && hits.data.length > 0 && (
             <table className="w-full border-collapse text-[11px]">
               <thead className="sticky top-0 bg-surface-1">
                 <tr className="border-b border-edge text-left text-ink-faint">
@@ -490,6 +514,7 @@ export function WatchPage() {
                   <th className="whitespace-nowrap px-2 py-1 font-medium">
                     Time <span className="font-normal text-ink-faint">{timeZone === 'utc' ? 'UTC' : 'local'}</span>
                   </th>
+                  <th className="w-6" title="The payload against its schema, graded as the hit was caught" />
                   <th className="whitespace-nowrap px-2 py-1 font-medium">Watch</th>
                   <th className="whitespace-nowrap px-2 py-1 font-medium">Source</th>
                   {/* The slack column: shows the whole name whenever there is
@@ -1504,6 +1529,42 @@ function MarkRow({
   )
 }
 
+/** A hit the schema rejects or disagrees with, or that has no schema at all. */
+function isProblem(hit: WatchHit): boolean {
+  return hit.grade === 'failing' || hit.grade === 'drifting' || hit.grade === 'missing'
+}
+
+/** One glyph per grade, in the Health screen's colours; the headline is the tooltip. */
+const GRADE_MARKS: Record<
+  HitGrade,
+  { icon: typeof CheckCircle2; className: string; label: string }
+> = {
+  ok: { icon: CheckCircle2, className: 'text-ok/70', label: 'Matches the schema' },
+  failing: { icon: XCircle, className: 'text-danger', label: 'Rejected by the schema' },
+  drifting: {
+    icon: AlertTriangle,
+    className: 'text-warn',
+    label: 'Validates, but drifts from the schema',
+  },
+  missing: {
+    icon: HelpCircle,
+    className: 'text-danger',
+    label: 'No schema is registered for this event type',
+  },
+  unknown: { icon: HelpCircle, className: 'text-ink-faint', label: 'Could not be graded' },
+}
+
+function GradeMark({ grade, headline }: { grade: HitGrade | null; headline: string | null }) {
+  // Hits stored before grading existed have nothing to say.
+  if (!grade) return <span className="block size-3" />
+  const { icon: Icon, className, label } = GRADE_MARKS[grade]
+  return (
+    <span className="block size-3" title={headline ? `${label}: ${headline}` : label}>
+      <Icon className={cn('size-3', className)} aria-label={label} />
+    </span>
+  )
+}
+
 function HitRow({
   hit,
   color,
@@ -1547,6 +1608,9 @@ function HitRow({
           title={formatDateTime(hit.timestamp, timeZone)}
         >
           {formatTime(hit.timestamp, timeZone)}
+        </td>
+        <td className="px-1 py-1">
+          <GradeMark grade={hit.grade} headline={hit.headline} />
         </td>
         <td className="whitespace-nowrap px-2 py-1">
           {color ? (
@@ -1607,7 +1671,7 @@ function HitRow({
       </tr>
       {expanded && (
         <tr className="border-b border-edge/40 bg-surface-0">
-          <td colSpan={6} className="p-0">
+          <td colSpan={7} className="p-0">
             <div className="flex items-center gap-3 px-3 pt-2 font-mono text-[10px] text-ink-faint">
               <span>{hit.eventId ?? 'no id'}</span>
               <span>{hit.logGroup}</span>

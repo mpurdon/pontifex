@@ -558,6 +558,60 @@ export function setAcceptsNull(
   return next
 }
 
+/**
+ * Whether a node refuses the empty value of its type: `""` for a string, zero
+ * or less for a number.
+ *
+ * `required` alone does not — the key exists, so it is satisfied — which is
+ * how a producer sends `{"ssn": ""}` past a schema that requires `ssn`.
+ */
+export function isNonEmpty(type: NodeType, constraints: Record<string, unknown>): boolean {
+  switch (type) {
+    case 'string': {
+      const min = constraints.minLength
+      return typeof min === 'number' && min >= 1
+    }
+    case 'number':
+    case 'integer': {
+      const above = constraints.exclusiveMinimum
+      const min = constraints.minimum
+      return (
+        (typeof above === 'number' && above >= 0) || (typeof min === 'number' && min > 0)
+      )
+    }
+    default:
+      return false
+  }
+}
+
+/**
+ * The keyword changes that make a node non-empty, or allow empty again.
+ *
+ * `null` for a type with no notion of empty. Turning it on leaves a stricter
+ * bound alone — a string that must be four characters is already non-empty.
+ * Turning it off removes the lower bound entirely, because that is what
+ * allowing empty means, even where the bound was tighter than one.
+ * `exclusiveMinimum` is written as a number, the draft-07 spelling the bus
+ * validates under and the inspector already edits.
+ */
+export function nonEmptyPatch(
+  type: NodeType,
+  constraints: Record<string, unknown>,
+  on: boolean,
+): Record<string, unknown> | null {
+  switch (type) {
+    case 'string':
+      if (on) return isNonEmpty(type, constraints) ? {} : { minLength: 1 }
+      return { minLength: undefined }
+    case 'number':
+    case 'integer':
+      if (on) return isNonEmpty(type, constraints) ? {} : { exclusiveMinimum: 0 }
+      return { exclusiveMinimum: undefined, minimum: undefined }
+    default:
+      return null
+  }
+}
+
 /** Toggle a property's presence in its parent object's `required` array. */
 export function setRequired(
   doc: unknown,

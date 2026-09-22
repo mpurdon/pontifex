@@ -502,6 +502,7 @@ export type IssueKind =
   | 'wrongType'
   | 'outsideEnum'
   | 'missingRequired'
+  | 'emptyRequired'
   | 'undeclared'
   | 'neverSeen'
   | 'rejected'
@@ -590,6 +591,8 @@ export type Repair =
   | { kind: 'extendEnum'; values: unknown[] }
   /** Stop requiring a field that events omit. */
   | { kind: 'dropRequired' }
+  /** `minLength: 1`, so a blank string no longer satisfies a required field. */
+  | { kind: 'requireNonEmpty' }
   /** Declare a field that events send and the schema does not describe. */
   | { kind: 'declareField'; types: string[]; example?: unknown }
 
@@ -601,10 +604,21 @@ export interface RepairSuggestion {
   modelId: string
 }
 
+/** A required field that producers send, but blank. */
+export interface EmptyField {
+  path: string
+  /** Events containing the field at all. */
+  seenIn: number
+  /** Events where it was an empty or whitespace-only string. */
+  emptyIn: number
+}
+
 export interface DriftReport {
   undeclared: FieldObservation[]
   unused: UnusedField[]
   missingRequired: FieldObservation[]
+  /** Declared required and present, yet blank in some events. */
+  emptyRequired: EmptyField[]
   typeMismatches: TypeMismatch[]
   enumDrift: EnumDrift[]
 }
@@ -647,6 +661,8 @@ export interface ReportRow {
   typeMismatches: number
   enumDrift: number
   missingRequired: number
+  /** Required fields present but blank in some events. */
+  emptyRequired: number
   status: ReportStatus
   headline: string | null
   /**
@@ -1044,7 +1060,14 @@ export interface WatchHit {
   event: unknown
   /** From the look-back pass that runs on arming: context, not news. Never notified. */
   backfill: boolean
+  /** The payload against its schema, graded as the hit was caught. Null on older hits. */
+  grade: HitGrade | null
+  /** Why, when the grade is not `ok`. */
+  headline: string | null
 }
+
+/** A hit's payload against its schema, in the Health screen's vocabulary. */
+export type HitGrade = 'ok' | 'failing' | 'drifting' | 'missing' | 'unknown'
 
 /** How often a watch would have fired over recent history. */
 export interface WatchProbe {

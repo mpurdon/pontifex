@@ -49,6 +49,7 @@ describe('repairLabel', () => {
 
   it('labels the repairs that take no operands', () => {
     expect(repairLabel({ kind: 'dropRequired' })).toBe('Make optional')
+    expect(repairLabel({ kind: 'requireNonEmpty' })).toBe('Require a value')
     expect(repairLabel({ kind: 'declareField', types: ['string'] })).toBe(
       'Declare as string',
     )

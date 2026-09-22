@@ -507,6 +507,8 @@ pub struct ReportRow {
     pub type_mismatches: usize,
     pub enum_drift: usize,
     pub missing_required: usize,
+    /// Required fields present but blank in some events.
+    pub empty_required: usize,
     pub status: RowStatus,
     /// The most useful single line about this row.
     pub headline: Option<String>,
@@ -845,6 +847,7 @@ pub async fn registry_report(
                         } else if !drift.undeclared.is_empty()
                             || !drift.type_mismatches.is_empty()
                             || !drift.enum_drift.is_empty()
+                            || !drift.empty_required.is_empty()
                         {
                             RowStatus::Drifting
                         } else {
@@ -869,6 +872,7 @@ pub async fn registry_report(
                             type_mismatches: drift.type_mismatches.len(),
                             enum_drift: drift.enum_drift.len(),
                             missing_required: drift.missing_required.len(),
+                            empty_required: drift.empty_required.len(),
                             status,
                             headline,
                             wire_identity,

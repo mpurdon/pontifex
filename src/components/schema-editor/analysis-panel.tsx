@@ -307,6 +307,8 @@ export function AnalysisPanel({
     () => result?.issues.filter((i) => !resolved[i.key]) ?? [],
     [result, resolved],
   )
+  /** Open issues worth a warning, for the verdict badge. */
+  const drifting = outstanding.filter((i) => i.severity !== 'info').length
   // Everything dealt with this session, including repairs the re-check can no
   // longer see — those are exactly the ones that worked, and a record that
   // drops them the moment they succeed is no record at all.
@@ -428,9 +430,34 @@ export function AnalysisPanel({
         {result && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             <Badge tone="neutral">{result.sampled} sampled</Badge>
+            {/* Two verdicts, not one: whether the schema rejects the events,
+                and whether it should. "All pass" over a list of drift read as
+                a contradiction, so passing with open issues says both. */}
+            {result.sampled > 0 &&
+              (result.failed > 0 ? (
+                <Badge tone="danger">
+                  <XCircle className="size-2.5" />
+                  {result.failed} fail
+                </Badge>
+              ) : drifting > 0 ? (
+                <Badge
+                  tone="warn"
+                  title="Every event validates, but the schema and the traffic disagree — see below"
+                >
+                  <AlertTriangle className="size-2.5" />
+                  all pass · {drifting} {drifting === 1 ? 'issue' : 'issues'}
+                </Badge>
+              ) : (
+                <Badge tone="ok">
+                  <CheckCircle2 className="size-2.5" />
+                  all pass
+                </Badge>
+              ))}
+            {/* Provenance, not a verdict: kept apart from the counts on the right. */}
             {result.fromCache && (
               <Badge
                 tone="info"
+                className="ml-auto"
                 title={
                   result.cacheAgeMs != null
                     ? `Cached ${formatAge(result.cacheAgeMs)} ago — no AWS call`
@@ -442,18 +469,7 @@ export function AnalysisPanel({
                 {result.cacheAgeMs != null && ` ${formatAge(result.cacheAgeMs)}`}
               </Badge>
             )}
-            {result.sampled > 0 &&
-              (result.failed === 0 ? (
-                <Badge tone="ok">
-                  <CheckCircle2 className="size-2.5" />
-                  all pass
-                </Badge>
-              ) : (
-                <Badge tone="danger">
-                  <XCircle className="size-2.5" />
-                  {result.failed} fail
-                </Badge>
-              ))}
+
             {recheck.isPending && (
               <span className="text-[10px] text-ink-faint">re-checking…</span>
             )}

@@ -482,6 +482,8 @@ pub async fn put_schema(
         // Registry writes change shared state, so they are recorded at info
         // regardless of level: "who changed prd and when" must be answerable.
         linfo!(cat::REGISTRY, "updated {name} in {registry} -> v{version}");
+        // Hits caught from now on grade against this version, not the cached one.
+        state.watcher.forget_schemas().await;
         Ok(WriteResult {
             version,
             name,
@@ -501,6 +503,7 @@ pub async fn put_schema(
         let out = req.send().await.map_err(map_sdk_error)?;
         let version = out.schema_version().unwrap_or("1").to_string();
         linfo!(cat::REGISTRY, "created {name} in {registry} -> v{version}");
+        state.watcher.forget_schemas().await;
         Ok(WriteResult {
             version,
             name,

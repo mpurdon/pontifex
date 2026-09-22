@@ -12,6 +12,8 @@ import {
   removeProperty,
   renameProperty,
   setKeywords,
+  isNonEmpty,
+  nonEmptyPatch,
   setAcceptsNull,
   setNodeType,
   setRefTarget,
@@ -697,5 +699,41 @@ describe('edits', () => {
     expect(
       JSON.stringify(removeProperty(doc(), '/components/schemas/Ghost', 'x')),
     ).toBe(before)
+  })
+})
+
+describe('non-empty', () => {
+  it('reads a string as non-empty from any positive minLength', () => {
+    expect(isNonEmpty('string', {})).toBe(false)
+    expect(isNonEmpty('string', { minLength: 0 })).toBe(false)
+    expect(isNonEmpty('string', { minLength: 1 })).toBe(true)
+    expect(isNonEmpty('string', { minLength: 4 })).toBe(true)
+  })
+
+  it('reads a number as non-empty when zero is excluded', () => {
+    expect(isNonEmpty('number', {})).toBe(false)
+    expect(isNonEmpty('integer', { minimum: 0 })).toBe(false)
+    expect(isNonEmpty('number', { exclusiveMinimum: 0 })).toBe(true)
+    expect(isNonEmpty('integer', { minimum: 1 })).toBe(true)
+  })
+
+  it('writes the smallest bound that refuses empty, and leaves a stricter one', () => {
+    expect(nonEmptyPatch('string', {}, true)).toEqual({ minLength: 1 })
+    expect(nonEmptyPatch('string', { minLength: 4 }, true)).toEqual({})
+    expect(nonEmptyPatch('integer', {}, true)).toEqual({ exclusiveMinimum: 0 })
+  })
+
+  it('removes the lower bound when empty is allowed again', () => {
+    expect(nonEmptyPatch('string', { minLength: 4 }, false)).toEqual({ minLength: undefined })
+    expect(nonEmptyPatch('number', { minimum: 1 }, false)).toEqual({
+      exclusiveMinimum: undefined,
+      minimum: undefined,
+    })
+  })
+
+  it('does not apply to types with no empty value', () => {
+    expect(nonEmptyPatch('boolean', {}, true)).toBeNull()
+    expect(nonEmptyPatch('object', {}, true)).toBeNull()
+    expect(isNonEmpty('array', { minItems: 1 })).toBe(false)
   })
 })

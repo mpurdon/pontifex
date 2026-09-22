@@ -31,6 +31,8 @@ pub enum Repair {
     ExtendEnum { values: Vec<Value> },
     /// Stop requiring a field that events omit.
     DropRequired,
+    /// Refuse a blank string in a field that producers send empty.
+    RequireNonEmpty,
     /// Declare a field that events send and the schema does not describe.
     DeclareField {
         types: Vec<String>,
@@ -70,6 +72,7 @@ pub fn apply(document: &Value, type_name: &str, path: &str, repair: &Repair) -> 
 
     match repair {
         Repair::DropRequired => drop_required(&mut next, &pointer, &leaf, path),
+        Repair::RequireNonEmpty => require_non_empty(&mut next, &pointer, &leaf, path),
         Repair::WidenType { types } => widen_type(&mut next, &pointer, &leaf, path, types),
         Repair::ExtendEnum { values } => extend_enum(&mut next, &pointer, &leaf, path, values),
         Repair::DeclareField { types, .. } => declare_field(&mut next, &pointer, &leaf, types),
@@ -163,6 +166,24 @@ fn widen_type(
         }
     }
 
+    Ok(())
+}
+
+/// `minLength: 1`, so `""` no longer satisfies a required string.
+///
+/// A stricter bound already there is left alone: a field that must be at
+/// least four characters is already non-empty.
+fn require_non_empty(
+    document: &mut Value,
+    pointer: &str,
+    leaf: &str,
+    path: &str,
+) -> Result<()> {
+    let property = property_mut(document, pointer, leaf, path)?;
+    let current = property.get("minLength").and_then(Value::as_u64).unwrap_or(0);
+    if current < 1 {
+        property.insert("minLength".to_string(), json!(1));
+    }
     Ok(())
 }
 
@@ -443,6 +464,30 @@ mod tests {
         assert_eq!(
             property(&next, "/components/schemas/Event/properties/code/enum"),
             &json!(["1", 1])
+        );
+    }
+
+    #[test]
+    fn requiring_non_empty_sets_a_minimum_length() {
+        let next = apply_to(&document(), "status", &Repair::RequireNonEmpty).unwrap();
+        let status = property(&next, "/components/schemas/Event/properties/status");
+        assert_eq!(status.get("minLength"), Some(&json!(1)));
+        // Still required, still an enum — only no longer satisfiable by "".
+        assert!(status.get("enum").is_some());
+        assert_eq!(
+            property(&next, "/components/schemas/Event/required"),
+            &json!(["id", "status"])
+        );
+    }
+
+    #[test]
+    fn requiring_non_empty_keeps_a_stricter_bound() {
+        let mut base = document();
+        base["components"]["schemas"]["Event"]["properties"]["status"]["minLength"] = json!(4);
+        let next = apply_to(&base, "status", &Repair::RequireNonEmpty).unwrap();
+        assert_eq!(
+            property(&next, "/components/schemas/Event/properties/status").get("minLength"),
+            Some(&json!(4))
         );
     }
 

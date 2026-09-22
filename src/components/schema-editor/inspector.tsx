@@ -5,6 +5,8 @@ import {
   NODE_TYPES,
   type NodeType,
   type SchemaNode,
+  isNonEmpty,
+  nonEmptyPatch,
 } from '@/lib/schema-model'
 import { Badge, Button, Checkbox, Field, Input, Select } from '@/components/ui'
 
@@ -99,6 +101,8 @@ export interface InspectorProps {
   onSetType: (node: SchemaNode, type: NodeType) => void
   onSetRequired: (node: SchemaNode, required: boolean) => void
   onSetKeyword: (node: SchemaNode, key: string, value: unknown) => void
+  /** Several keywords in one edit, for a control that writes more than one. */
+  onSetKeywords: (node: SchemaNode, changes: Record<string, unknown>) => void
   /** Widen or narrow `type` to include `"null"`. */
   onSetAcceptsNull: (node: SchemaNode, accepts: boolean) => void
   onSetRefTarget: (node: SchemaNode, target: string) => void
@@ -184,6 +188,7 @@ export function Inspector({
   onSetType,
   onSetRequired,
   onSetKeyword,
+  onSetKeywords,
   onSetAcceptsNull,
   onSetRefTarget,
   onRemove,
@@ -377,6 +382,19 @@ export function Inspector({
           onChange={(e) => onSetAcceptsNull(node, e.target.checked)}
           label="Accepts null"
         />
+        {/* `required` is satisfied by `""`, so a producer can send a required
+            field and still send nothing. This is the bound that stops that. */}
+        <span title="Rejects an empty string, or zero and below for a number. Writes minLength: 1 or exclusiveMinimum: 0.">
+          <Checkbox
+            checked={isNonEmpty(effectiveType, node.constraints)}
+            disabled={nonEmptyPatch(effectiveType, node.constraints, true) === null}
+            onChange={(e) => {
+              const changes = nonEmptyPatch(effectiveType, node.constraints, e.target.checked)
+              if (changes && Object.keys(changes).length > 0) onSetKeywords(node, changes)
+            }}
+            label="Non-empty"
+          />
+        </span>
       </div>
 
 

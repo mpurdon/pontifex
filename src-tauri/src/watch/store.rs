@@ -512,6 +512,8 @@ mod tests {
             detail_type: None,
             event: json!({}),
             backfill: false,
+            grade: None,
+            headline: None,
         }
     }
 

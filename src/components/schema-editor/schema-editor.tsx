@@ -684,6 +684,9 @@ export function SchemaEditor({
                 onSetKeyword={(node, key, value) =>
                   onChange(setKeywords(document, node.pointer, { [key]: value }))
                 }
+                onSetKeywords={(node, changes) =>
+                  onChange(setKeywords(document, node.pointer, changes))
+                }
                 onSetAcceptsNull={(node, accepts) =>
                   onChange(setAcceptsNull(document, node.pointer, accepts))
                 }

@@ -134,6 +134,7 @@ fn kind_phrase(kind: IssueKind) -> &'static str {
         IssueKind::WrongType => "sends a field with the wrong type",
         IssueKind::OutsideEnum => "sends a value the schema does not allow",
         IssueKind::MissingRequired => "omits a required field",
+        IssueKind::EmptyRequired => "sends a required field blank",
         IssueKind::Undeclared => "sends a field the schema does not describe",
         IssueKind::NeverSeen => "never sends a field the schema declares",
         IssueKind::Rejected => "sends events the schema rejects",

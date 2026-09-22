@@ -318,6 +318,12 @@ export function DriftBreakdown({ report }: { report: RegistryReport }) {
         bar: 'bg-danger',
         hint: 'Declared required, yet missing from some events',
       },
+      {
+        key: 'emptyRequired' as const,
+        label: 'required but blank',
+        bar: 'bg-info',
+        hint: 'Declared required and present, yet an empty string in some events',
+      },
     ]
 
     return spec.map((k) => ({

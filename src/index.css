@@ -97,10 +97,13 @@ body {
  * named hooks set by the shared components in `components/ui.tsx`.
  */
 @layer base {
+  /* Anchored to the viewport, so panes side by side rule from one sheet
+     rather than each starting the grid at its own corner. */
   body,
   .bg-surface-0 {
     background-image: var(--canvas-texture);
     background-size: var(--canvas-texture-size);
+    background-attachment: fixed;
   }
 
   /* The raised surface: a selected row, the active nav item. */

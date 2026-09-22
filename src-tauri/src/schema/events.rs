@@ -38,6 +38,21 @@ pub struct FieldObservation {
     pub example: Option<Value>,
 }
 
+/// A required field that producers send, but blank.
+///
+/// `required` only asks that the key exist, and `type: string` accepts `""`,
+/// so an event carrying `{"ssn": ""}` validates against a schema that
+/// requires `ssn`. That is almost never what requiring it meant.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmptyField {
+    pub path: String,
+    /// Events containing the field at all.
+    pub seen_in: usize,
+    /// Events where it was an empty or whitespace-only string.
+    pub empty_in: usize,
+}
+
 /// A field the schema declares but the sample never contained.
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,6 +113,8 @@ pub struct DriftReport {
     pub unused: Vec<UnusedField>,
     /// Declared `required`, yet missing from some events.
     pub missing_required: Vec<FieldObservation>,
+    /// Declared `required` and present, yet blank in some events.
+    pub empty_required: Vec<EmptyField>,
     pub type_mismatches: Vec<TypeMismatch>,
     pub enum_drift: Vec<EnumDrift>,
 }
@@ -118,6 +135,8 @@ pub enum IssueKind {
     OutsideEnum,
     /// A field marked required is absent from some events.
     MissingRequired,
+    /// A field marked required is present but blank in some events.
+    EmptyRequired,
     /// Producers send a field the schema does not describe.
     Undeclared,
     /// The schema declares a field the sample never contained.
@@ -279,6 +298,8 @@ struct Seen {
     examples: BTreeMap<String, Value>,
     /// Distinct scalar values at this path, capped.
     values: Vec<Value>,
+    /// Whether the value was an empty or whitespace-only string.
+    blank: bool,
 }
 
 impl Seen {
@@ -286,6 +307,9 @@ impl Seen {
         let ty = type_name_of(value).to_string();
         if !self.types.contains(&ty) {
             self.types.push(ty.clone());
+        }
+        if value.as_str().is_some_and(|s| s.trim().is_empty()) {
+            self.blank = true;
         }
         self.examples.entry(ty).or_insert_with(|| value.clone());
         // Only scalars: comparing whole objects would be both expensive and
@@ -344,6 +368,8 @@ struct Observation {
     value_counts: Vec<(Value, usize)>,
     /// The first value seen, for rows that do not care which type it was.
     example: Option<Value>,
+    /// Events where the value was a blank string.
+    blank_in: usize,
 }
 
 impl Observation {
@@ -353,6 +379,9 @@ impl Observation {
 
     fn absorb(&mut self, seen: Seen) {
         self.seen_in += 1;
+        if seen.blank {
+            self.blank_in += 1;
+        }
         for ty in &seen.types {
             *self.type_counts.entry(ty.clone()).or_insert(0) += 1;
             if let Some(example) = seen.examples.get(ty) {
@@ -690,6 +719,16 @@ pub fn check_events(
                         example: Some(example.clone()),
                     });
                 }
+
+                // Present, required, and blank: the schema is satisfied and the
+                // producer has still sent nothing.
+                if field.required && observation.blank_in > 0 {
+                    drift.empty_required.push(EmptyField {
+                        path: path.clone(),
+                        seen_in: *seen_in,
+                        empty_in: observation.blank_in,
+                    });
+                }
             }
         }
     }
@@ -711,6 +750,9 @@ pub fn check_events(
         .type_mismatches
         .sort_by_key(|m| std::cmp::Reverse(m.mismatched_in));
     drift.missing_required.sort_by_key(|f| f.seen_in);
+    drift
+        .empty_required
+        .sort_by(|a, b| b.empty_in.cmp(&a.empty_in).then(a.path.cmp(&b.path)));
     drift.unused.sort_by(|a, b| a.path.cmp(&b.path));
 
     let classified: Vec<(FailureGroup, FailureClass)> = grouped.into_values().collect();
@@ -1071,6 +1113,35 @@ fn build_issues(
             example: field.example.clone(),
             message,
             fix: repairable(&field.path).then_some(Repair::DropRequired),
+            impact: None,
+        });
+    }
+
+    for field in &drift.empty_required {
+        // No failure to match: the schema accepts a blank string, which is the
+        // whole finding.
+        issues.push(Issue {
+            key: format!("emptyRequired:{}", field.path),
+            kind: IssueKind::EmptyRequired,
+            severity: severity_for(IssueKind::EmptyRequired, false, None),
+            path: field.path.clone(),
+            summary: format!(
+                "{} is required but blank in {} of events",
+                field_label(&field.path),
+                percent(field.empty_in, sampled),
+            ),
+            action: format!(
+                "Require at least one character in {}, or fix the producers that send it blank.",
+                field_label(&field.path)
+            ),
+            declared: Some("required".to_string()),
+            observed: Some(format!("blank in {}/{}", field.empty_in, sampled)),
+            affected: field.empty_in,
+            sampled,
+            rejects: false,
+            example: Some(Value::String(String::new())),
+            message: None,
+            fix: repairable(&field.path).then_some(Repair::RequireNonEmpty),
             impact: None,
         });
     }
@@ -1547,6 +1618,41 @@ mod tests {
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].path, "a");
         assert_eq!(missing[0].seen_in, 1);
+    }
+
+    #[test]
+    fn reports_a_required_field_sent_blank() {
+        // `required` is satisfied by `""`, so this is drift, not a failure —
+        // and the kind of drift that was invisible before it had a name.
+        let events = vec![
+            json!({ "clientId": "" }),
+            json!({ "clientId": "abc" }),
+            json!({ "clientId": "   " }),
+        ];
+        let report = check_events(&document(), "Sync", &events).unwrap();
+        assert_eq!(report.failed, 0);
+        let empty = &report.drift.empty_required;
+        assert_eq!(empty.len(), 1);
+        assert_eq!(empty[0].path, "clientId");
+        assert_eq!(empty[0].seen_in, 3);
+        assert_eq!(empty[0].empty_in, 2);
+
+        let issue = report
+            .issues
+            .iter()
+            .find(|i| i.kind == IssueKind::EmptyRequired)
+            .expect("an issue for the blank field");
+        assert!(issue.summary.contains("blank in 67%"), "{}", issue.summary);
+        assert!(!issue.rejects);
+        assert_eq!(issue.fix, Some(Repair::RequireNonEmpty));
+    }
+
+    #[test]
+    fn a_blank_optional_field_is_not_drift() {
+        // `note` is optional; an empty note is a choice, not a defect.
+        let events = vec![json!({ "clientId": "a", "note": "" })];
+        let report = check_events(&document(), "Sync", &events).unwrap();
+        assert!(report.drift.empty_required.is_empty());
     }
 
     #[test]
