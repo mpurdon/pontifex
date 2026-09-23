@@ -4,6 +4,7 @@ import {
   buildTree,
   getAtPointer,
   componentSchemas,
+  declaredPaths,
   payloadSchemaName,
   refReferrers,
   removeComponentSchema,
@@ -735,5 +736,39 @@ describe('non-empty', () => {
     expect(nonEmptyPatch('boolean', {}, true)).toBeNull()
     expect(nonEmptyPatch('object', {}, true)).toBeNull()
     expect(isNonEmpty('array', { minItems: 1 })).toBe(false)
+  })
+})
+
+describe('declaredPaths', () => {
+  it('lists payload fields through refs and arrays, in condition syntax', () => {
+    const doc = {
+      components: {
+        schemas: {
+          AWSEvent: { type: 'object', properties: { detail: { $ref: '#/components/schemas/Order' } } },
+          Order: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              client: { $ref: '#/components/schemas/Client' },
+              items: { type: 'array', items: { $ref: '#/components/schemas/Line' } },
+            },
+          },
+          Client: { type: 'object', properties: { dob: { type: 'string' }, parent: { $ref: '#/components/schemas/Client' } } },
+          Line: { type: 'object', properties: { sku: { type: 'string' } } },
+        },
+      },
+    }
+    expect(declaredPaths(doc)).toEqual([
+      'id',
+      'client',
+      'client.dob',
+      'client.parent',
+      'items',
+      'items[0].sku',
+    ])
+  })
+
+  it('is empty for a document with no payload type', () => {
+    expect(declaredPaths({})).toEqual([])
   })
 })

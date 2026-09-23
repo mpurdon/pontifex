@@ -457,6 +457,48 @@ export function payloadSchemaName(doc: unknown): string | undefined {
   return names.find((n) => n !== 'AWSEvent') ?? names[0]
 }
 
+/**
+ * Every field path the payload type declares, in the form a watch condition
+ * takes: `clientId`, `client.dob`, `items[0].id`.
+ *
+ * Refs are followed into sibling component schemas; a type that refers back
+ * to itself stops at the first repeat rather than recursing forever. Arrays
+ * are spelled with `[0]` because that is what CloudWatch's pattern grammar
+ * accepts — there is no "any element" selector.
+ */
+export function declaredPaths(doc: unknown, limit = 400): string[] {
+  const schemas = componentSchemas(doc)
+  const root = payloadSchemaName(doc)
+  if (!root) return []
+  const out: string[] = []
+
+  const walk = (schema: JsonObject, prefix: string, seen: string[]) => {
+    if (out.length >= limit) return
+    const ref = schema.$ref
+    if (typeof ref === 'string') {
+      const name = refName(ref)
+      if (!name || seen.includes(name) || !(name in schemas)) return
+      return walk(schemas[name], prefix, [...seen, name])
+    }
+    const properties = schema.properties
+    if (properties && typeof properties === 'object') {
+      for (const [key, child] of Object.entries(properties as JsonObject)) {
+        if (out.length >= limit) return
+        const path = prefix ? `${prefix}.${key}` : key
+        out.push(path)
+        if (child && typeof child === 'object') walk(child as JsonObject, path, seen)
+      }
+    }
+    const items = schema.items
+    if (items && typeof items === 'object' && prefix) {
+      walk(items as JsonObject, `${prefix}[0]`, seen)
+    }
+  }
+
+  walk(schemas[root], '', [root])
+  return out
+}
+
 /** How many times each component schema is referenced across the document. */
 export function refUsage(doc: unknown): Record<string, number> {
   const counts: Record<string, number> = {}

@@ -1541,6 +1541,87 @@ pub async fn event_sources(
     Ok(sources.into_values().collect())
 }
 
+/// Which cached events exhibit one issue from an analysis.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueExamplesRequest {
+    pub name: String,
+    /// The document the analysis ran against, so the examples agree with it.
+    pub content: Value,
+    pub type_name: Option<String>,
+    /// The issue's stable key, e.g. `emptyRequired:client.dob`.
+    pub issue_key: String,
+    /// The window the analysis sampled.
+    pub minutes: Option<i64>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueExample {
+    pub id: String,
+    pub timestamp: i64,
+    pub detail: Value,
+}
+
+/// The cached events that show one issue, newest first.
+///
+/// Re-grades each cached event on its own and keeps those whose report names
+/// the same issue key: the analysis summarises a sample, and deciding what to
+/// do about a finding means looking at the events behind it. Reads the cache
+/// only — these are the very events the analysis graded.
+///
+/// This rests on an issue key meaning the same thing at any sample size —
+/// which `schema::events` owes it, and guards with a test named for this: a
+/// key that only exists at sample size 102 matches nothing here, and the
+/// drawer then reports that no cached event shows a finding every event in the
+/// sample shows.
+#[tauri::command]
+pub async fn events_for_issue(
+    state: State<'_, AppState>,
+    request: IssueExamplesRequest,
+    env_id: Option<String>,
+) -> Result<Vec<IssueExample>> {
+    let identity = EventIdentity::from_schema_name(&request.name)?;
+    let document = model::parse_content(&request.content)?;
+    let type_name = detail_type_name(&document, request.type_name.as_deref())?;
+    let env = state.resolve_environment(env_id.as_deref()).await?;
+    let log_groups = resolve_log_groups(&env, None)?;
+    let minutes = request.minutes.unwrap_or(60 * 24).max(1);
+    let now = crate::events_cache::now_ms();
+    let start = now - minutes * 60 * 1000;
+    let limit = request.limit.unwrap_or(25).clamp(1, 200);
+
+    let events = state
+        .events
+        .events_across(
+            &env.id,
+            &log_groups,
+            &identity.source,
+            &identity.detail_type,
+            start,
+            now,
+        )
+        .await;
+
+    let mut out = Vec::new();
+    for event in events {
+        let report =
+            events::check_events(&document, &type_name, std::slice::from_ref(&event.detail))?;
+        if report.issues.iter().any(|i| i.key == request.issue_key) {
+            out.push(IssueExample {
+                id: event.id,
+                timestamp: event.timestamp,
+                detail: event.detail,
+            });
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Check one event, as caught by a watch, against the schema registered for
 /// its type. No schema at all is reported as the finding it is.
 #[tauri::command]

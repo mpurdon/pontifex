@@ -28,11 +28,12 @@ import {
   XCircle,
 } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
-import type { CompiledWatch, Environment, FiledTicket, IpcError, Issue, NotifierOutcome, HitGrade, Watch, WatchCondition, WatchHit, WatchMark, WatchProbe, WatchStatus } from '@/lib/types'
+import type { CompiledWatch, Environment, FiledTicket, IpcError, Issue, NotifierOutcome, HitGrade, Watch, WatchHit, WatchMark, WatchProbe, WatchStatus } from '@/lib/types'
 import { KIND_LABELS, SEVERITY_TONE, describeSeverity } from '@/lib/issues'
 import { FileTicketDialog, FiledChip } from '@/features/jira/file-ticket-dialog'
 import { formatAge, formatDateTime, formatMoment, formatTime, stringify } from '@/lib/format'
 import { TimeZoneToggle } from '@/components/time-zone-toggle'
+import { ConditionEditor } from './conditions'
 import {
   Badge,
   Button,
@@ -50,6 +51,7 @@ import {
   Toolbar,
   cn,
 } from '@/components/ui'
+import { ResizableGroup, ResizablePanel, ResizeHandle } from '@/components/resizable'
 import { useSettings } from '@/app/settings-context'
 import { useLoginForEnvironment } from '@/app/login-dialog'
 import { upsertStatus, useNow, useWatchStatuses, watchKeys } from './use-watch-events'
@@ -419,8 +421,15 @@ export function WatchPage() {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="flex w-[400px] shrink-0 flex-col border-r border-edge bg-surface-1">
+      {/* The watch list wants width for long labels and the hit list for
+          long detail types; which matters more depends on the day. */}
+      <ResizableGroup id="watch-page" panelIds={['watches', 'hits']} className="flex-1">
+        <ResizablePanel
+          id="watches"
+          defaultSize="28"
+          minSize="18"
+          className="flex flex-col border-r border-edge bg-surface-1"
+        >
           {editing ? (
             <WatchEditor
               key={editing.id || 'new'}
@@ -448,9 +457,11 @@ export function WatchPage() {
               onEdit={setEditing}
             />
           )}
-        </aside>
+        </ResizablePanel>
 
-        <section className="min-w-0 flex-1 overflow-auto">
+        <ResizeHandle />
+
+        <ResizablePanel id="hits" defaultSize="72" minSize="40" className="min-w-0 overflow-auto">
           {hits.isError && (
             <div className="p-3">
               <ErrorBox error={ipc.asIpcError(hits.error)} {...credentials} />
@@ -558,8 +569,8 @@ export function WatchPage() {
               </tbody>
             </table>
           )}
-        </section>
-      </div>
+        </ResizablePanel>
+      </ResizableGroup>
     </div>
   )
 }
@@ -1069,11 +1080,6 @@ function WatchEditor({
   const isNew = !initial.id
 
   const update = (changes: Partial<Watch>) => setDraft((d) => ({ ...d, ...changes }))
-  const setCondition = (index: number, changes: Partial<WatchCondition>) =>
-    setDraft((d) => ({
-      ...d,
-      conditions: d.conditions.map((c, i) => (i === index ? { ...c, ...changes } : c)),
-    }))
 
   // What is actually sent depends on the mode; the other half is dropped so a
   // stale raw pattern cannot silently override the fields you can see.
@@ -1114,7 +1120,9 @@ function WatchEditor({
   return (
     <>
       <header className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-edge px-3">
-        <h2 className="text-xs font-semibold text-ink">{isNew ? 'New watch' : 'Edit watch'}</h2>
+        <h2 className="truncate text-xs font-semibold text-ink">
+          {isNew ? 'New watch' : 'Edit watch'}
+        </h2>
         {!isNew && (
           // Takes effect immediately, independent of Save: pausing a watch is
           // a decision about now, not about the draft.
@@ -1145,9 +1153,13 @@ function WatchEditor({
         </Field>
 
         <Field label="Log group">
+          {/* Full width, and allowed to be narrower than its longest option:
+              a log group name is long enough to set the width of the whole
+              panel otherwise. */}
           <Select
             value={draft.logGroup ?? ''}
             onChange={(e) => update({ logGroup: e.target.value || null })}
+            className="w-full min-w-0"
           >
             <option value="">{defaultGroup(logGroups)} (default)</option>
             {logGroups
@@ -1182,8 +1194,11 @@ function WatchEditor({
           </Field>
         ) : (
           <>
+            {/* `min-w-0` on both cells: a grid track will not shrink below the
+                width an input asks for, and this panel is resizable down to a
+                couple of hundred pixels. */}
             <div className="grid grid-cols-2 gap-2">
-              <Field label="Source">
+              <Field label="Source" className="min-w-0">
                 <Input
                   value={draft.source ?? ''}
                   onChange={(e) => update({ source: e.target.value || null })}
@@ -1192,7 +1207,7 @@ function WatchEditor({
                   spellCheck={false}
                 />
               </Field>
-              <Field label="Detail type">
+              <Field label="Detail type" className="min-w-0">
                 <Input
                   value={draft.detailType ?? ''}
                   onChange={(e) => update({ detailType: e.target.value || null })}
@@ -1203,65 +1218,13 @@ function WatchEditor({
               </Field>
             </div>
 
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-ink-muted">Payload conditions</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() =>
-                    update({
-                      conditions: [...draft.conditions, { path: 'detail.', op: 'eq', value: '' }],
-                    })
-                  }
-                >
-                  <Plus className="size-3" />
-                  Condition
-                </Button>
-              </div>
-              {draft.conditions.map((condition, index) => (
-                <div key={index} className="flex items-center gap-1">
-                  <Input
-                    value={condition.path}
-                    onChange={(e) => setCondition(index, { path: e.target.value })}
-                    placeholder="detail.clientId"
-                    className="flex-1 font-mono"
-                    spellCheck={false}
-                  />
-                  <Select
-                    value={condition.op}
-                    onChange={(e) => setCondition(index, { op: e.target.value as 'eq' | 'ne' })}
-                    className="w-14"
-                  >
-                    <option value="eq">=</option>
-                    <option value="ne">≠</option>
-                  </Select>
-                  <Input
-                    value={condition.value}
-                    onChange={(e) => setCondition(index, { value: e.target.value })}
-                    placeholder="abc-123"
-                    className="flex-1 font-mono"
-                    spellCheck={false}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() =>
-                      update({ conditions: draft.conditions.filter((_, i) => i !== index) })
-                    }
-                    title="Remove condition"
-                  >
-                    <X className="size-3" />
-                  </Button>
-                </div>
-              ))}
-              <span className="text-[10px] text-ink-faint">
-                Paths start at the envelope: <span className="font-mono">detail.clientId</span>,{' '}
-                <span className="font-mono">detail.items[0].id</span>. Unquoted numbers compare
-                numerically; <span className="font-mono">*</span> is a wildcard in strings;
-                wrap a value in quotes to force a string match.
-              </span>
-            </div>
+            <ConditionEditor
+              conditions={draft.conditions}
+              onChange={(conditions) => update({ conditions })}
+              envId={envId}
+              source={draft.source}
+              detailType={draft.detailType}
+            />
           </>
         )}
 
@@ -1322,7 +1285,7 @@ function WatchEditor({
         </Field>
 
         <div className="flex flex-col gap-1.5">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="secondary"
               size="sm"
@@ -1345,7 +1308,9 @@ function WatchEditor({
         {remove.isError && <ErrorBox error={remove.error} />}
       </div>
 
-      <footer className="flex shrink-0 items-center gap-2 border-t border-edge p-3">
+      {/* Wraps rather than overflowing: four buttons do not fit across a panel
+          dragged narrow, and a footer that scrolls sideways hides Save. */}
+      <footer className="flex shrink-0 flex-wrap items-center gap-2 border-t border-edge p-3">
         <Button
           variant="primary"
           onClick={() => save.mutate(effective)}
@@ -1807,10 +1772,15 @@ function HitCheck({
       )}
       <FileTicketDialog
         open={!!filing}
-        issue={filing}
+        findings={filing ? [filing] : []}
         context={context}
         onClose={() => setFiling(null)}
-        onFiled={(issueKey, ticket) => setFiled((prev) => ({ ...prev, [issueKey]: ticket }))}
+        onFiled={(issueKeys, ticket) =>
+          setFiled((prev) => ({
+            ...prev,
+            ...Object.fromEntries(issueKeys.map((key) => [key, ticket])),
+          }))
+        }
       />
     </div>
   )

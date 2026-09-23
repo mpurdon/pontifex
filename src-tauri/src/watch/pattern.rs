@@ -98,13 +98,32 @@ pub fn compile_group(watches: &[&Watch]) -> Result<Option<String>> {
     })
 }
 
-/// `detail.clientId`, `.detail.clientId` and `$.detail.clientId` all mean the
-/// same thing to a person; this is the path with any such root removed.
-fn strip_root(path: &str) -> &str {
-    path.strip_prefix("$.")
-        .or_else(|| path.strip_prefix('$'))
-        .or_else(|| path.strip_prefix('.'))
-        .unwrap_or(path)
+/// Where a typed path points, from the envelope root.
+///
+/// The payload of every event lives under `detail`, so that is where a bare
+/// path lives: `clientId` means `detail.clientId`, and there is no prefix to
+/// get wrong. Two spellings reach the envelope itself: `$.account` — the
+/// CloudWatch form — and, kept for watches saved before this rule, a path
+/// that already begins with `detail`. A leading `.` is tolerated and means
+/// the same as none. The one field this cannot name is a payload field
+/// called `detail`, which is a trade worth making.
+fn payload_path(path: &str) -> String {
+    let path = path.trim();
+    if let Some(body) = path.strip_prefix("$.").or_else(|| path.strip_prefix('$')) {
+        return body.to_string();
+    }
+    let body = path.strip_prefix('.').unwrap_or(path);
+    if body == "detail" || body.starts_with("detail.") || body.starts_with("detail[") {
+        return body.to_string();
+    }
+    if body.is_empty() {
+        return String::new();
+    }
+    if body.starts_with('[') {
+        format!("detail{body}")
+    } else {
+        format!("detail.{body}")
+    }
 }
 
 /// Normalise a user-typed path to the `$.a.b` form CloudWatch wants.
@@ -113,10 +132,10 @@ fn strip_root(path: &str) -> &str {
 /// (`$."detail-type"`), so the same check applies here rather than letting
 /// the poller discover it on its first call.
 fn selector(path: &str) -> Result<String> {
-    let body = strip_root(path);
+    let body = payload_path(path);
     if body.is_empty() {
         return Err(Error::Invalid(
-            "A condition needs a field path, e.g. detail.clientId".into(),
+            "A condition needs a field path, e.g. clientId".into(),
         ));
     }
     if body.contains('"') || body.contains(' ') {
@@ -215,13 +234,14 @@ fn value_equals(actual: &Value, expected: &str) -> bool {
     actual.as_str().is_some_and(|s| glob(expected, s))
 }
 
-/// Walk `$.a.b[0].c` (or `a.b[0].c`) through a JSON value.
+/// Walk a condition path through an envelope, under the same rule the
+/// pattern compiles by: bare paths live in `detail`, `$.` names the envelope.
 ///
-/// The dotted path becomes a JSON pointer (`/a/b/0/c`), and serde does the
-/// walking; only the syntax conversion lives here.
+/// The dotted path becomes a JSON pointer (`/detail/a/0/c`), and serde does
+/// the walking; only the syntax conversion lives here.
 pub fn lookup<'v>(value: &'v Value, path: &str) -> Option<&'v Value> {
     let mut pointer = String::new();
-    for segment in strip_root(path).split('.').filter(|s| !s.is_empty()) {
+    for segment in payload_path(path).split('.').filter(|s| !s.is_empty()) {
         let (name, indexes) = segment.split_once('[').unwrap_or((segment, ""));
         if !name.is_empty() {
             pointer.push('/');
@@ -288,6 +308,36 @@ mod tests {
             compile(&w).unwrap().unwrap(),
             r#"{ $.source = "client-profile*" && $.detail-type = "*sync" && $.detail.clientId = "abc-123" && $.detail.count != 5 && $.detail.code = "007" }"#
         );
+    }
+
+    #[test]
+    fn bare_paths_live_in_detail_and_dollar_names_the_envelope() {
+        let mut w = watch();
+        w.conditions = vec![
+            condition("clientId", WatchOp::Eq, "abc"),
+            condition("items[0].id", WatchOp::Eq, "x"),
+            condition("$.account", WatchOp::Eq, "acct-1"),
+            condition("detail.legacy", WatchOp::Eq, "y"),
+            condition(".dotted", WatchOp::Eq, "z"),
+        ];
+        assert_eq!(
+            compile(&w).unwrap().unwrap(),
+            r#"{ $.detail.clientId = "abc" && $.detail.items[0].id = "x" && $.account = "acct-1" && $.detail.legacy = "y" && $.detail.dotted = "z" }"#
+        );
+        let envelope = serde_json::json!({
+            "account": "acct-1",
+            "detail": { "clientId": "abc", "items": [{ "id": "x" }], "legacy": "y", "dotted": "z" }
+        });
+        assert!(matches(&w, &envelope));
+        assert_eq!(
+            lookup(&envelope, "clientId"),
+            Some(&Value::String("abc".into()))
+        );
+        assert_eq!(
+            lookup(&envelope, "$.account"),
+            Some(&Value::String("acct-1".into()))
+        );
+        assert_eq!(lookup(&envelope, "account"), None);
     }
 
     #[test]

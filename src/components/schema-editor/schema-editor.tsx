@@ -50,7 +50,7 @@ import {
 } from '@/components/ui'
 import { countChanges, diffTrees, type ChangeStatus } from '@/lib/schema-diff'
 import type { FieldHistory } from '@/lib/schema-history'
-import { AnalysisPanel } from './analysis-panel'
+import { AnalysisPanel, type AnalysisHandle } from './analysis-panel'
 import { OriginPanel } from '@/features/origin/origin-panel'
 import type { PanelImperativeHandle } from 'react-resizable-panels'
 import {
@@ -197,6 +197,16 @@ export function SchemaEditor({
   } | null>(null)
   /** A concern being written up, about the event type or one field. */
   const [concern, setConcern] = useState<ConcernSubject | null>(null)
+  /**
+   * The analysis, for the bug button.
+   *
+   * With findings, that button files them — all of them, as one ticket, rather
+   * than leaving the same producer eight separate ones to read. Without, there
+   * is nothing to report but a person's own reading of the schema, which is
+   * what a concern is.
+   */
+  const analysis = useRef<AnalysisHandle>(null)
+  const [findingCount, setFindingCount] = useState(0)
 
   /**
    * Where a concern files to. The schema name carries the event's identity,
@@ -636,17 +646,31 @@ export function SchemaEditor({
               variant="ghost"
               size="sm"
               className="ml-auto"
-              onClick={() =>
+              onClick={() => {
+                if (findingCount > 0) {
+                  // The list being filed is worth seeing while it is filed,
+                  // and the rows it covers are marked when it lands.
+                  selectTab('analysis')
+                  analysis.current?.fileAll()
+                  return
+                }
                 setConcern({
                   path: '',
                   label: `the event type ${ticketContext.detailType || ticketContext.schemaName}`,
                   declared: null,
                   observed: null,
                 })
+              }}
+              title={
+                findingCount > 0
+                  ? `File all ${findingCount} finding${findingCount === 1 ? '' : 's'} from the last analysis as one ticket, with the team that owns the producer`
+                  : 'Raise a concern about this event type — its name, its source, its shape — with the team that owns the producer'
               }
-              title="Raise a concern about this event type — its name, its source, its shape — with the team that owns the producer"
             >
               <Bug className="size-3" />
+              {findingCount > 0 && (
+                <span className="font-mono text-[10px] tabular-nums">{findingCount}</span>
+              )}
             </Button>
           )}
         </div>
@@ -731,6 +755,11 @@ export function SchemaEditor({
           {schemaName && (
             <div className={cn('absolute inset-0', activeTab !== 'analysis' && 'hidden')}>
               <AnalysisPanel
+                // Keyed on the environment: the panel keeps its result behind
+                // the other tabs, and switching environment would otherwise
+                // show — and, from the button above, file — dev's findings
+                // under prd's name. Switching schema already remounts this.
+                key={envId ?? 'no-environment'}
                 schemaName={schemaName}
                 document={document}
                 envId={envId}
@@ -739,6 +768,8 @@ export function SchemaEditor({
                 active={activeTab === 'analysis'}
                 onApplySuggestions={onChange}
                 onCoverage={(counts, sampled) => setCoverage({ counts, sampled })}
+                onFindingCount={setFindingCount}
+                ref={analysis}
               />
             </div>
           )}

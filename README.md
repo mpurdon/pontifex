@@ -24,8 +24,8 @@ Companion to `~/Projects/trajector/global-event-bus`.
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Schemas**  | Every schema in the registry, grouped by event source and fuzzy-filterable. Structured tree editor plus raw JSON, live validation, version history, diff-vs-live and diff-vs-version, register/delete. |
 | **Generate** | Describe an event in plain English and get a conforming schema back from Bedrock. Also refactors and explains existing schemas. Output is always a validated draft you must save.    |
-| **Logs**     | CloudWatch view of the `/aws/events/*` groups, filtered by source and detail-type (or a raw filter pattern), with expandable event payloads.                                         |
-| **Watch**    | Passive, all-day listening. Define what to watch for — a source, a detail type, a payload field like `detail.clientId = abc-123` — and get a desktop notification and a hit log when it goes past. |
+| **Logs**     | CloudWatch view of the `/aws/events/*` groups, filtered by source and detail-type, payload conditions, or a raw filter pattern, with expandable event payloads.                                         |
+| **Watch**    | Passive, all-day listening. Define what to watch for — a source, a detail type, a payload field like `clientId = abc-123` — and get a desktop notification and a hit log when it goes past. |
 | **Health**   | Every schema in the registry graded against real traffic in one pass — failing, drifting, healthy, or unseen — plus event types on the bus with no schema at all.                     |
 | **Topology** | What `stacks/busConfiguration.ts` declares versus what is actually deployed, with rules, targets and drift in both directions.                                                       |
 | **Settings** | AWS profiles with live status and SSO sign-in, per-stage environments, registry discovery, Bedrock model catalog, and the theme.                                                     |
@@ -538,8 +538,8 @@ answer matters. Both caches drop entries older than thirty days.
 
 **Watch** sits on the bus all day and says when something you care about goes
 past. A watch is any mix of a source, a detail type, and payload conditions —
-`clientPortal-*` with `client.portal.page_load`, say, or `detail.clientId =
-abc-123` on its own — or a complete CloudWatch filter pattern if you would
+`clientPortal-*` with `client.portal.page_load`, say, or `clientId = abc-123`
+on its own — or a complete CloudWatch filter pattern if you would
 rather write it yourself. A hit is recorded in the Watch screen, badged on the
 nav and the dock, and (per watch) raised as a desktop notification.
 
@@ -651,10 +651,14 @@ The hit list is built for scanning rather than reading:
   same for the watch being edited, and a pause toggle in its header that takes
   effect immediately, independent of Save.
 
-Conditions use paths from the envelope root (`detail.clientId`,
-`detail.items[0].id`). Unquoted numbers compare numerically, `*` is a wildcard
-inside strings, and wrapping a value in quotes forces a string match — the same
-rules CloudWatch applies. A notification names the event and the fields the
+Condition paths are inside the payload (`clientId`, `items[0].id`); start one
+with `$.` to reach the envelope (`$.account`). Paths saved as `detail.x`
+still work. While the source and detail type match registered schemas, the
+path field completes from the fields those schemas declare, the way an editor
+completes a member name. Unquoted numbers compare numerically, `*` is a
+wildcard inside strings, and wrapping a value in quotes forces a string match
+— the same rules CloudWatch applies. The Logs screen's **Advanced** search
+takes the same conditions, compiled by the same code. A notification names the event and the fields the
 watch was keyed on, so a `clientId` watch shows the id without opening the app.
 
 Expect ten to thirty seconds from `put-events` to a notification: a few

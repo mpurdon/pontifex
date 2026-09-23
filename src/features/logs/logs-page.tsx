@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, RefreshCw, ScrollText } from 'lucide-react'
+import { ChevronDown, ChevronRight, RefreshCw, ScrollText, SlidersHorizontal } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
-import type { LogEvent } from '@/lib/types'
+import type { IpcError, LogEvent, LogPage, WatchCondition } from '@/lib/types'
+import { ConditionEditor } from '@/features/watch/conditions'
 import {
   Badge,
   Button,
@@ -17,8 +18,9 @@ import {
 } from '@/components/ui'
 import { useSettings } from '@/app/settings-context'
 import { useLoginForEnvironment } from '@/app/login-dialog'
-import { formatTime } from '@/lib/format'
+import { formatDateTime, formatTime } from '@/lib/format'
 import { TimeZoneToggle } from '@/components/time-zone-toggle'
+import { cn } from '@/components/ui'
 
 const RANGES = [
   { label: 'Last 15m', minutes: 15 },
@@ -38,6 +40,12 @@ export function LogsPage() {
   const [detailType, setDetailType] = useState('')
   const [rawPattern, setRawPattern] = useState('')
   const [useRaw, setUseRaw] = useState(false)
+  // Payload conditions, the same grammar a watch uses, compiled into the
+  // pattern with the source and detail type when the search runs.
+  const [advanced, setAdvanced] = useState(false)
+  const [conditions, setConditions] = useState<WatchCondition[]>([])
+  const [compiledPattern, setCompiledPattern] = useState<string | null>(null)
+  const [compileError, setCompileError] = useState<IpcError | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   /**
@@ -64,13 +72,17 @@ export function LogsPage() {
     }
   }, [groups.data, logGroup])
 
+  const activeConditions = conditions.filter((c) => c.path.trim())
+  const structured = !useRaw && advanced && activeConditions.length > 0
+
   const query = useMemo(
     () => ({
       logGroup,
       startTime: Date.now() - minutes * 60_000,
-      source: useRaw ? undefined : source || undefined,
-      detailType: useRaw ? undefined : detailType || undefined,
-      filterPattern: useRaw ? rawPattern || undefined : undefined,
+      // A compiled pattern already carries the source and detail type.
+      source: useRaw || structured ? undefined : source || undefined,
+      detailType: useRaw || structured ? undefined : detailType || undefined,
+      filterPattern: useRaw ? rawPattern || undefined : structured ? (compiledPattern ?? undefined) : undefined,
       limit: 300,
     }),
     // `runToken` is intentionally a dependency: it is what makes Search
@@ -79,6 +91,37 @@ export function LogsPage() {
     [logGroup, minutes, runToken],
   )
 
+  /**
+   * Search. With conditions, the pattern is compiled first by the same code
+   * that compiles a watch, so the two screens cannot disagree about the
+   * grammar, and the query only runs once the pattern is in hand.
+   */
+  const search = async () => {
+    setCompileError(null)
+    if (structured) {
+      try {
+        const compiled = await ipc.compileWatchPattern({
+          id: '',
+          envId: envId ?? '',
+          label: '',
+          enabled: true,
+          logGroup,
+          source: source || null,
+          detailType: detailType || null,
+          conditions: activeConditions,
+          rawPattern: null,
+          notify: false,
+          color: null,
+        })
+        setCompiledPattern(compiled.pattern)
+      } catch (e) {
+        setCompileError(ipc.asIpcError(e))
+        return
+      }
+    }
+    setRunToken((t) => t + 1)
+  }
+
   const logs = useQuery({
     queryKey: ['logs', envId, 'events', query],
     queryFn: () => ipc.queryLogs(query, envId),
@@ -86,6 +129,31 @@ export function LogsPage() {
     retry: false,
     refetchInterval: autoRefresh ? 10_000 : false,
   })
+
+  // Older pages, fetched on demand from where the last scan stopped. Reset
+  // whenever the search itself changes.
+  const [older, setOlder] = useState<LogPage[]>([])
+  const [continuing, setContinuing] = useState<IpcError | 'busy' | null>(null)
+  useEffect(() => {
+    setOlder([])
+    setContinuing(null)
+  }, [query])
+  const last = older.at(-1) ?? logs.data
+  const events = useMemo(
+    () => [...(logs.data?.events ?? []), ...older.flatMap((p) => p.events)],
+    [logs.data, older],
+  )
+  const searchMore = async () => {
+    if (!last) return
+    setContinuing('busy')
+    try {
+      const page = await ipc.queryLogs({ ...query, endTime: last.searchedFrom }, envId)
+      setOlder((prev) => [...prev, page])
+      setContinuing(null)
+    } catch (e) {
+      setContinuing(ipc.asIpcError(e))
+    }
+  }
 
   const toggle = (index: number) => {
     setExpanded((prev) => {
@@ -158,7 +226,21 @@ export function LogsPage() {
           label="raw pattern"
         />
 
-        <Button variant="primary" onClick={() => setRunToken((t) => t + 1)}>
+        {!useRaw && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setAdvanced((a) => !a)}
+            title="Add conditions on the event payload"
+            className={cn(advanced && 'bg-surface-3 text-ink')}
+          >
+            <SlidersHorizontal className="size-3" />
+            Advanced
+            {activeConditions.length > 0 && ` (${activeConditions.length})`}
+          </Button>
+        )}
+
+        <Button variant="primary" onClick={search}>
           Search
         </Button>
 
@@ -181,12 +263,27 @@ export function LogsPage() {
           </Button>
           {logs.data && (
             <span className="text-[11px] text-ink-faint">
-              {logs.data.events.length} event
-              {logs.data.events.length === 1 ? '' : 's'}
+              {events.length} event
+              {events.length === 1 ? '' : 's'}
             </span>
           )}
         </div>
       </Toolbar>
+
+      {advanced && !useRaw && (
+        <div className="flex flex-col gap-2 border-b border-edge bg-surface-1 px-3 py-2">
+          <div className="max-w-2xl">
+            <ConditionEditor
+              conditions={conditions}
+              onChange={setConditions}
+              envId={envId}
+              source={source}
+              detailType={detailType}
+            />
+          </div>
+          {compileError && <ErrorBox error={compileError} className="max-w-2xl" />}
+        </div>
+      )}
 
       {logs.data?.filterPattern && (
         <div className="border-b border-edge bg-surface-1 px-3 py-1 font-mono text-[10px] text-ink-faint">
@@ -207,15 +304,48 @@ export function LogsPage() {
         )}
         {logs.isLoading && <Spinner label="Querying CloudWatch…" />}
 
-        {logs.data && logs.data.events.length === 0 && (
+        {/* How far back the scan reached is the fact that turns "no events"
+            into an answer: nothing between here and now, or nothing looked at
+            yet. Continue picks up where it stopped. */}
+        {last && !logs.isLoading && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-edge/60 px-3 py-1.5 text-[10px] text-ink-faint">
+            <span>
+              Searched back to{' '}
+              <span className="font-mono text-ink-muted">
+                {formatDateTime(last.searchedFrom, timeZone)}
+              </span>
+              {last.complete ? ' — the whole window' : ''}
+            </span>
+            {last.scanNote && <span>· {last.scanNote}</span>}
+            {!last.complete && (
+              <Button
+                size="sm"
+                loading={continuing === 'busy'}
+                onClick={searchMore}
+                title="Search the next stretch of the window, further back in time"
+              >
+                Continue further back
+              </Button>
+            )}
+            {continuing && continuing !== 'busy' && (
+              <ErrorBox error={continuing} className="w-full" />
+            )}
+          </div>
+        )}
+
+        {logs.data && events.length === 0 && (
           <EmptyState
             icon={<ScrollText className="size-8" />}
-            title="No events in this window"
-            detail="Widen the time range, or check the source and detail-type filters."
+            title={last?.complete ? 'No events in this window' : 'Nothing yet in the stretch searched'}
+            detail={
+              last?.complete
+                ? 'Widen the time range, or check the source and detail-type filters.'
+                : 'The scan stopped before reaching the start of the window. Continue further back, or narrow the filters.'
+            }
           />
         )}
 
-        {logs.data && logs.data.events.length > 0 && (
+        {logs.data && events.length > 0 && (
           <table className="w-full border-collapse text-[11px]">
             <thead className="sticky top-0 bg-surface-1">
               <tr className="border-b border-edge text-left text-ink-faint">
@@ -231,7 +361,7 @@ export function LogsPage() {
               </tr>
             </thead>
             <tbody>
-              {logs.data.events.map((event, index) => (
+              {events.map((event, index) => (
                 <LogRow
                   key={`${event.timestamp}-${index}`}
                   event={event}

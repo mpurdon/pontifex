@@ -2,6 +2,7 @@ import { invoke as rawInvoke } from '@tauri-apps/api/core'
 import type {
   AiRequest,
   AiResponse,
+  EventTicket,
   AuthorizeUrlParts,
   ApplyImportResult,
   BedrockModel,
@@ -31,6 +32,8 @@ import type {
   ProfileCheck,
   ProfileStatus,
   RealityCheckRequest,
+  IssueExamplesRequest,
+  IssueExample,
   RealityCheckResult,
   RegistryReport,
   RegistryReportRequest,
@@ -374,6 +377,10 @@ export const checkAgainstEvents = (
   envId?: string,
 ) => invoke<RealityCheckResult>('check_against_events', { request, envId })
 
+/** The cached events that show one issue, newest first. */
+export const eventsForIssue = (request: IssueExamplesRequest, envId?: string) =>
+  invoke<IssueExample[]>('events_for_issue', { request, envId })
+
 /** The schema's last persisted analysis, if one was run in the last month. */
 export const cachedAnalysis = (name: string, envId?: string) =>
   invoke<CachedAnalysis | null>('cached_analysis', { name, envId })
@@ -537,6 +544,24 @@ export const jiraProjects = () => invoke<JiraProject[]>('jira_projects')
 export const jiraIssueTypes = (projectKey: string) =>
   invoke<string[]>('jira_issue_types', { projectKey })
 
+/**
+ * Every ticket filed about one event type, and which findings each covers.
+ *
+ * Jira is the record, not Pontifex: the labels on a ticket name the bus, the
+ * producer and the event type, so this is a search rather than a list we
+ * would have to keep and keep correct.
+ */
+export const jiraEventTickets = (context: TicketContext, paths: string[]) =>
+  invoke<EventTicket[]>('jira_event_tickets', { request: { context, paths } })
+
+/**
+ * Every Pontifex ticket in an environment, by the schema it is about.
+ *
+ * One search for a whole report, rather than one per row.
+ */
+export const jiraTicketsBySchema = (schemaNames: string[], envId?: string) =>
+  invoke<Record<string, EventTicket[]>>('jira_tickets_by_schema', { schemaNames, envId })
+
 /** What a project demands before it will accept a ticket. */
 export const jiraRequiredFields = (projectKey: string, issueType: string) =>
   invoke<RequiredField[]>('jira_required_fields', { projectKey, issueType })
@@ -548,8 +573,8 @@ export const setJiraFieldDefaults = (
 ) => invoke<void>('set_jira_field_defaults', { projectKey, fields })
 
 /** Render a ticket without filing it, and report any ticket already open for it. */
-export const previewJiraTicket = (issue: Issue, context: TicketContext) =>
-  invoke<TicketPreview>('preview_jira_ticket', { request: { issue, context } })
+export const previewJiraTicket = (issues: Issue[], context: TicketContext) =>
+  invoke<TicketPreview>('preview_jira_ticket', { request: { issues, context } })
 
 export const fileJiraTicket = (request: FileTicketRequest) =>
   invoke<FileTicketResult>('file_jira_ticket', { request })

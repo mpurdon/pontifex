@@ -133,11 +133,11 @@ export function ConcernDialog({
       </Modal>
       <FileTicketDialog
         open={open && !!issue}
-        issue={issue}
+        findings={issue ? [issue] : []}
         context={context}
         onClose={onClose}
-        onFiled={(key, ticket) => {
-          onFiled?.(key, ticket)
+        onFiled={(keys, ticket) => {
+          for (const key of keys) onFiled?.(key, ticket)
           onClose()
         }}
       />

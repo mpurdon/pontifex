@@ -91,10 +91,39 @@ impl JiraClient {
     }
 
     fn url(&self, path: &str) -> Result<String> {
+        self.versioned_url(2, path)
+    }
+
+    fn versioned_url(&self, version: u8, path: &str) -> Result<String> {
         Ok(format!(
-            "{API_BASE}/ex/jira/{}/rest/api/2{path}",
+            "{API_BASE}/ex/jira/{}/rest/api/{version}{path}",
             self.cloud_id()?
         ))
+    }
+
+    /// Run a JQL search.
+    ///
+    /// On v3, and on `/search/jql` rather than `/search`: the `/search`
+    /// endpoints both versions had since forever were removed from Jira Cloud
+    /// during 2025 and now answer 410 Gone. Everything else here stays on v2
+    /// because ticket bodies are wiki markup rather than ADF — but nothing a
+    /// search reads back differs between the versions. `summary`, `status`,
+    /// `labels` and `updated` are the same shape in both; it is `description`
+    /// that v3 returns as a document, and no search here asks for it.
+    ///
+    /// One page. The new endpoint pages by `nextPageToken` rather than
+    /// `startAt`, and no caller here wants a second page.
+    pub async fn search(&self, jql: &str, fields: &str, max_results: u32) -> Result<Value> {
+        let max = max_results.to_string();
+        let response = http()
+            .get(self.versioned_url(3, "/search/jql")?)
+            .query(&[("jql", jql), ("fields", fields), ("maxResults", max.as_str())])
+            .bearer_auth(&self.tokens.access_token)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| Error::Internal(format!("Cannot reach Jira: {e}")))?;
+        read_json(response, "searching for tickets").await
     }
 
     pub async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value> {

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type {
+  EventTicket,
   IpcError,
   RegistryReport,
   ReportRow,
@@ -189,6 +190,27 @@ export function ReportPage() {
     () => new Map((registry.data ?? []).map((s) => [s.name, s])),
     [registry.data],
   )
+
+  const jira = useQuery({
+    queryKey: ['jira', 'status'],
+    queryFn: ipc.jiraStatus,
+    staleTime: 30_000,
+    retry: false,
+  })
+
+  /**
+   * What has been filed about the schemas in this report, and where each one
+   * stands — one search for the whole table, because the labels on a ticket
+   * name the bus and the event type alike.
+   */
+  const names = useMemo(() => (report?.rows ?? []).map((row) => row.name), [report])
+  const tickets = useQuery({
+    queryKey: ['jira', 'ticketsBySchema', envId, names.join('|')],
+    queryFn: () => ipc.jiraTicketsBySchema(names, envId),
+    enabled: !!jira.data?.connected && names.length > 0,
+    staleTime: 60_000,
+    retry: false,
+  })
 
   // Age of the report relative to the window it claims to cover.
   const [now, setNow] = useState(() => Date.now())
@@ -646,6 +668,12 @@ export function ReportPage() {
                       onSort={setSort}
                       title="Sort by total drift"
                     />
+                    <th
+                      className="px-2 py-1 font-medium"
+                      title="Tickets filed from Pontifex about this event type"
+                    >
+                      Filed
+                    </th>
                     <th className="w-full px-2 py-1 font-medium">Detail</th>
                   </tr>
                 </thead>
@@ -654,6 +682,7 @@ export function ReportPage() {
                     <Row
                       key={row.name}
                       row={row}
+                      tickets={tickets.data?.[row.name]}
                       selectable={FILEABLE.has(row.status)}
                       selected={selected.has(row.name)}
                       onSelect={toggleSelected}
@@ -725,8 +754,43 @@ function SortHeader({
  * re-renders the page, and without this every one of ~300 rows reconciled to
  * show the same thing.
  */
+/**
+ * What has been filed about one event type, in a cell that cannot wrap.
+ *
+ * The newest ticket that is still open leads — that is the one someone would
+ * go to — with a count of the rest. Closed tickets are struck through rather
+ * than hidden: "this was raised and dealt with" is the answer to a question
+ * this table otherwise cannot answer.
+ */
+function FiledCell({ tickets }: { tickets?: EventTicket[] }) {
+  if (!tickets || tickets.length === 0) {
+    return <span className="text-ink-faint">—</span>
+  }
+  const lead = tickets.find((t) => !t.done) ?? tickets[0]
+  return (
+    <span className="inline-flex items-center gap-1">
+      <a
+        href={lead.url}
+        target="_blank"
+        rel="noreferrer"
+        title={tickets.map((t) => `${t.key} · ${t.status} — ${t.summary}`).join('\n')}
+        className={cn(
+          'font-mono hover:underline',
+          lead.done ? 'text-ink-faint line-through' : lead.started ? 'text-info' : 'text-warn',
+        )}
+      >
+        {lead.key}
+      </a>
+      {tickets.length > 1 && (
+        <span className="text-ink-faint">+{tickets.length - 1}</span>
+      )}
+    </span>
+  )
+}
+
 const Row = memo(function Row({
   row,
+  tickets,
   onOpen,
   selectable,
   selected,
@@ -734,6 +798,8 @@ const Row = memo(function Row({
   onToggleDone,
 }: {
   row: DisplayRow
+  /** Tickets filed about this event type, newest first. */
+  tickets?: EventTicket[]
   onOpen: (row: DisplayRow) => void
   selectable: boolean
   selected: boolean
@@ -808,6 +874,11 @@ const Row = memo(function Row({
             </span>
           </>
         )}
+      </td>
+
+      {/* Stops the click reaching the row: this one goes to Jira. */}
+      <td className="whitespace-nowrap px-2" onClick={(e) => e.stopPropagation()}>
+        <FiledCell tickets={tickets} />
       </td>
 
       {/* One line, always: the counts are abbreviated and never wrap, because

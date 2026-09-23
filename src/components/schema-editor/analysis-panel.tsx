@@ -1,21 +1,26 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useImperativeHandle, useMemo, useState } from 'react'
+import type { Ref } from 'react'
 import {
   AlertTriangle,
   Bug,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Database,
+  Eye,
   Info,
   RefreshCw,
   Sparkles,
   Undo2,
   Wand2,
+  X,
   XCircle,
 } from 'lucide-react'
 import { listen } from '@tauri-apps/api/event'
 import * as ipc from '@/lib/ipc'
+import { useSettings } from '@/app/settings-context'
 import { KIND_LABELS, SEVERITY_TONE, describeSeverity } from '@/lib/issues'
 import type {
   FieldObservation,
@@ -24,13 +29,17 @@ import type {
   Issue,
   IssueSeverity,
   RealityCheckResult,
+  EventTicket,
   Repair,
   RepairSuggestion,
   TicketContext,
+  IssueExample,
 } from '@/lib/types'
 import {
   Badge,
   Button,
+  CopyButton,
+  EmptyState,
   Checkbox,
   ErrorBox,
   Marked,
@@ -39,9 +48,9 @@ import {
   Spinner,
   cn,
 } from '@/components/ui'
-import { WINDOWS, formatAge } from '@/lib/format'
+import { WINDOWS, formatAge, formatDateTime } from '@/lib/format'
 import { examplesFor, repairLabel } from '@/lib/repair'
-import { FileTicketDialog, FiledChip } from '@/features/jira/file-ticket-dialog'
+import { FileTicketDialog, FiledChip, TicketChip } from '@/features/jira/file-ticket-dialog'
 import { RepoFileLink } from '@/features/origin/origin-panel'
 
 /**
@@ -66,6 +75,19 @@ interface Resolution {
   label: string
 }
 
+/** What the editor's chrome can ask of the analysis it is showing. */
+export interface AnalysisHandle {
+  /**
+   * Open one ticket covering every finding worth filing.
+   *
+   * Lives here rather than in the caller because filing is this panel's
+   * business — it owns the findings, the ticket context, and the record of
+   * what has already been filed — while the button that starts it sits in the
+   * tab strip above.
+   */
+  fileAll: () => void
+}
+
 /**
  * Checks a schema against the events actually on the bus.
  *
@@ -78,6 +100,8 @@ export function AnalysisPanel({
   document,
   onApplySuggestions,
   onCoverage,
+  onFindingCount,
+  ref,
   active = true,
   envId,
   environmentLabel,
@@ -88,6 +112,13 @@ export function AnalysisPanel({
   onApplySuggestions: (next: unknown) => void
   /** Feeds observed frequencies back so the tree can annotate each field. */
   onCoverage: (counts: Record<string, number>, sampled: number) => void
+  /**
+   * How many findings a roll-up would cover, so the chrome above can offer it.
+   * Zero — no analysis, or nothing left to file — and the bug button goes back
+   * to raising a concern.
+   */
+  onFindingCount?: (count: number) => void
+  ref?: Ref<AnalysisHandle>
   /** Named on every ticket: the same drift in dev and prd are different bugs. */
   environmentLabel?: string
   registryName?: string
@@ -101,6 +132,7 @@ export function AnalysisPanel({
   active?: boolean
   envId?: string
 }) {
+  const queryClient = useQueryClient()
   const [minutes, setMinutes] = useState(1440)
   const [result, setResult] = useState<RealityCheckResult | null>(null)
   /** When the result on screen was run, so its age can be shown. */
@@ -322,22 +354,84 @@ export function AnalysisPanel({
     staleTime: 30_000,
     retry: false,
   })
-  const [filing, setFiling] = useState<Issue | null>(null)
+  /** The findings whose ticket is open: one row's, or a roll-up of all. */
+  const [filing, setFiling] = useState<Issue[]>([])
   /** Tickets filed in this session, so the row can show where it went. */
   const [filed, setFiled] = useState<Record<string, FiledTicket>>({})
+  /** The issue whose events are open in the drawer. */
+  const [eventsFor, setEventsFor] = useState<Issue | null>(null)
 
-  const ticketContext: TicketContext | null = result
-    ? {
-        schemaName,
-        environment: environmentLabel ?? envId ?? 'unknown',
-        registry: registryName ?? null,
-        source: result.source,
-        detailType: result.detailType,
-        logGroup: result.logGroup,
-        minutes: result.minutes,
-        typeName: result.typeName,
+  // Memoised: the roll-up handle and the count reported upwards both depend on
+  // it, and a fresh object on every keystroke would fire them on every keystroke.
+  const ticketContext: TicketContext | null = useMemo(
+    () =>
+      result
+        ? {
+            schemaName,
+            environment: environmentLabel ?? envId ?? 'unknown',
+            registry: registryName ?? null,
+            source: result.source,
+            detailType: result.detailType,
+            logGroup: result.logGroup,
+            minutes: result.minutes,
+            typeName: result.typeName,
+          }
+        : null,
+    [result, schemaName, environmentLabel, envId, registryName],
+  )
+
+  /**
+   * What a roll-up ticket would cover: exactly the rows that offer a File
+   * button of their own. `outstanding` has already dropped whatever was fixed
+   * or filed this session, and an info-level row is a note nobody should
+   * receive a ticket for.
+   */
+  const fileable = useMemo(
+    () => outstanding.filter((issue) => issue.severity !== 'info'),
+    [outstanding],
+  )
+  useEffect(() => {
+    onFindingCount?.(ticketContext ? fileable.length : 0)
+  }, [fileable.length, ticketContext, onFindingCount])
+  useImperativeHandle(ref, () => ({ fileAll: () => setFiling(fileable) }), [fileable])
+
+  /** The fields on screen, so each ticket can say which of them it covers. */
+  const paths = useMemo(
+    () => [...new Set((result?.issues ?? []).map((i) => i.path).filter(Boolean))].sort(),
+    [result],
+  )
+
+  /**
+   * What has already been filed about this event type, and where it stands.
+   *
+   * Asked of Jira rather than remembered here: a ticket key kept in this
+   * panel's state lasted until the window was closed, and said nothing about
+   * what happened to it afterwards. The labels on a ticket name the bus, the
+   * producer and the event type, so the search is the record.
+   */
+  const tickets = useQuery({
+    queryKey: ['jira', 'eventTickets', envId, schemaName, paths.join('|')],
+    queryFn: () => ipc.jiraEventTickets(ticketContext!, paths),
+    enabled: !!ticketContext && !!jira.data?.connected,
+    staleTime: 60_000,
+    retry: false,
+  })
+
+  /**
+   * The ticket to show against one finding: an open one in preference to a
+   * closed one, and the newest where there are several — a roll-up and the
+   * single ticket it was filed alongside both cover the same field.
+   */
+  const ticketByPath = useMemo(() => {
+    const byPath = new Map<string, EventTicket>()
+    for (const ticket of tickets.data ?? []) {
+      for (const path of ticket.covers) {
+        const held = byPath.get(path)
+        if (!held || (held.done && !ticket.done)) byPath.set(path, ticket)
       }
-    : null
+    }
+    return byPath
+  }, [tickets.data])
 
   /** Everything a row needs, so a grouped row and a lone one get the same. */
   const rowProps = (issue: Issue): RowProps => ({
@@ -357,14 +451,33 @@ export function AnalysisPanel({
     suggesting: suggest.isPending && suggest.variables?.key === issue.key,
     onApplySuggestion: (repair) => applyRepair.mutate({ issue, repair }),
     filed: filed[issue.key],
+    tracked: ticketByPath.get(issue.path),
     // Info-level rows are notes, not bugs — nobody wants a ticket saying a
     // field was quiet this week.
-    onFile: issue.severity !== 'info' && ticketContext ? () => setFiling(issue) : undefined,
+    onFile: issue.severity !== 'info' && ticketContext ? () => setFiling([issue]) : undefined,
     canFile: jira.data?.connected ?? false,
+    // The events behind the finding. Only where events were graded: an
+    // unregistered type or a reviewer's concern has no per-event evidence.
+    onExamples:
+      result && issue.kind !== 'unregistered' && issue.kind !== 'concern'
+        ? () => setEventsFor(issue)
+        : undefined,
   })
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface-0">
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-surface-0">
+      {eventsFor && result && (
+        <ExampleDrawer
+          key={eventsFor.key}
+          issue={eventsFor}
+          schemaName={schemaName}
+          content={document}
+          typeName={result.typeName}
+          minutes={result.minutes}
+          envId={envId}
+          onClose={() => setEventsFor(null)}
+        />
+      )}
       {/*
         Controls wrap rather than compress: this now lives in a side column, so
         a fixed single row would either overflow or squeeze the window picker
@@ -472,6 +585,25 @@ export function AnalysisPanel({
 
             {recheck.isPending && (
               <span className="text-[10px] text-ink-faint">re-checking…</span>
+            )}
+          </div>
+        )}
+
+        {/* What has been filed about this event type, whenever it was filed
+            and whoever filed it — the answer to "did we raise this, and did
+            anything happen". */}
+        {(tickets.data?.length || tickets.isError) && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            <span className="text-[10px] text-ink-faint">filed</span>
+            {tickets.isError ? (
+              <span
+                className="text-[10px] text-ink-faint"
+                title={ipc.asIpcError(tickets.error).message}
+              >
+                — could not ask Jira
+              </span>
+            ) : (
+              tickets.data?.map((ticket) => <TicketChip key={ticket.key} ticket={ticket} />)
             )}
           </div>
         )}
@@ -583,24 +715,35 @@ export function AnalysisPanel({
 
       {ticketContext && (
         <FileTicketDialog
-          open={!!filing}
-          issue={filing}
+          open={filing.length > 0}
+          findings={filing}
           context={ticketContext}
-          onClose={() => setFiling(null)}
-          onFiled={(issueKey, ticket) => {
-            setFiled((prev) => ({ ...prev, [issueKey]: ticket }))
+          onClose={() => setFiling([])}
+          onFiled={(issueKeys, ticket) => {
+            setFiled((prev) => ({
+              ...prev,
+              ...Object.fromEntries(issueKeys.map((key) => [key, ticket])),
+            }))
             // Filed is dealt with, even though the document did not change:
             // the problem now belongs to whoever owns the producer, and
             // leaving it in the working list means meeting it again on every
-            // pass down the same list.
-            const issue = result?.issues.find((i) => i.key === issueKey)
+            // pass down the same list. A roll-up settles every row it covered.
+            // Ask Jira again, so the ticket joins the strip above with a real
+            // status. It may not be in the search index for a few seconds yet;
+            // the chip on the row is what covers that gap.
+            queryClient.invalidateQueries({ queryKey: ['jira', 'eventTickets'] })
             setResolved((prev) => ({
               ...prev,
-              [issueKey]: {
-                how: 'filed',
-                path: issue?.path ?? issueKey,
-                label: ticket.key,
-              },
+              ...Object.fromEntries(
+                issueKeys.map((key) => [
+                  key,
+                  {
+                    how: 'filed' as const,
+                    path: result?.issues.find((i) => i.key === key)?.path ?? key,
+                    label: ticket.key,
+                  },
+                ]),
+              ),
             }))
           }}
         />
@@ -697,6 +840,10 @@ interface RowProps {
   /** Whether Jira is connected — the button explains itself when it is not. */
   canFile: boolean
   filed?: FiledTicket
+  /** A ticket in Jira that already covers this field, filed whenever. */
+  tracked?: EventTicket
+  /** Opens the events that exhibit this issue. Absent where none were graded. */
+  onExamples?: () => void
 }
 
 /** Several undeclared fields under one parent, as one card. */
@@ -753,6 +900,8 @@ function IssueRow({
   onFile,
   canFile,
   filed,
+  tracked,
+  onExamples,
   nested = false,
 }: RowProps & {
   /** Inside a group: no border, the parent path already shown above. */
@@ -771,6 +920,17 @@ function IssueRow({
 
   const actions = (
     <div className="flex flex-wrap items-center justify-end gap-1">
+      {onExamples && (
+        <button
+          type="button"
+          onClick={onExamples}
+          title="Show the sampled events that have this problem"
+          className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-muted hover:bg-surface-3 hover:text-accent"
+        >
+          <Eye className="size-2.5" />
+          Events
+        </button>
+      )}
       {/* The repair sits beside the reason for it, and says what it will
           do rather than "Fix" — `Redeclare as string | null` is a claim
           you can disagree with before clicking, which "Fix" is not. */}
@@ -800,27 +960,41 @@ function IssueRow({
         </button>
       )}
 
+      {/* An open ticket is the answer to "file this", so it stands in for the
+          button — both at once read as a choice where there is none.
+
+          A closed one is history: the problem is back, and it can be raised
+          again. The old ticket stays beside the button as the link to what
+          was done about it last time.
+
+          The session's own record wins over Jira's either way, because a
+          ticket filed a moment ago is not in the search index yet. */}
       {filed ? (
         <FiledChip ticket={filed} />
+      ) : tracked && !tracked.done ? (
+        <TicketChip ticket={tracked} />
       ) : (
-        onFile && (
-          <button
-            type="button"
-            onClick={onFile}
-            disabled={!canFile}
-            title={
-              canFile
-                ? 'File this with the team that owns the producer'
-                : 'Connect Jira in Settings → Jira to file this'
-            }
-            // Muted, not faint: faint is what a disabled control looks
-            // like, and an action that can be taken should not.
-            className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-muted hover:bg-surface-3 hover:text-accent disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-muted"
-          >
-            <Bug className="size-2.5" />
-            File
-          </button>
-        )
+        <>
+          {tracked?.done && <TicketChip ticket={tracked} />}
+          {onFile && (
+            <button
+              type="button"
+              onClick={onFile}
+              disabled={!canFile}
+              title={
+                canFile
+                  ? 'File this with the team that owns the producer'
+                  : 'Connect Jira in Settings → Jira to file this'
+              }
+              // Muted, not faint: faint is what a disabled control looks
+              // like, and an action that can be taken should not.
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] text-ink-muted hover:bg-surface-3 hover:text-accent disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-muted"
+            >
+              <Bug className="size-2.5" />
+              File
+            </button>
+          )}
+        </>
       )}
     </div>
   )
@@ -1015,6 +1189,162 @@ function ResolvedSummary({
             </li>
           ))}
         </ul>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The events behind one finding, one at a time.
+ *
+ * A finding says "blank in 67% of events"; deciding what to do about it
+ * means looking at a few of those events — is it one producer, one path, a
+ * field that was renamed. Slides in over the issue list, inside the panel,
+ * so the tree and the schema stay where they are.
+ */
+function ExampleDrawer({
+  issue,
+  schemaName,
+  content,
+  typeName,
+  minutes,
+  envId,
+  onClose,
+}: {
+  issue: Issue
+  schemaName: string
+  content: unknown
+  typeName: string | null
+  minutes: number
+  envId?: string
+  onClose: () => void
+}) {
+  const { timeZone } = useSettings()
+  const [index, setIndex] = useState(0)
+  // Mounted off-screen, then slid in: the transition needs a frame to see the
+  // starting position.
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setShown(true))
+    return () => cancelAnimationFrame(frame)
+  }, [])
+
+  const examples = useQuery({
+    queryKey: ['analysis', envId, schemaName, 'examples', issue.key, minutes],
+    queryFn: () =>
+      ipc.eventsForIssue(
+        {
+          name: schemaName,
+          content,
+          typeName: typeName ?? undefined,
+          issueKey: issue.key,
+          minutes,
+        },
+        envId,
+      ),
+    enabled: !!envId,
+    staleTime: 60_000,
+  })
+
+  const list: IssueExample[] = examples.data ?? []
+  const current = list[index]
+  const prev = () => setIndex((i) => Math.max(0, i - 1))
+  const next = () => setIndex((i) => Math.min(list.length - 1, i + 1))
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      else if (e.key === 'ArrowLeft') prev()
+      else if (e.key === 'ArrowRight') next()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [list.length, onClose])
+
+  // The offending field, for picking its lines out of the payload. The last
+  // segment is enough: `client.dob` is found by `"dob"`.
+  const leaf = issue.path.replace(/\[\d*\]$/, '').split('.').pop() ?? ''
+  const text = current ? JSON.stringify(current.detail, null, 2) : ''
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Events with this issue"
+      className={cn(
+        'absolute inset-y-0 right-0 z-10 flex w-full flex-col border-l border-edge bg-surface-1 shadow-2xl transition-transform duration-200 ease-out',
+        shown ? 'translate-x-0' : 'translate-x-full',
+      )}
+    >
+      <div className="chrome-panel flex shrink-0 items-start gap-2 border-b border-edge px-3 py-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-mono text-xs text-ink">{issue.path || schemaName}</span>
+            <Badge tone="neutral">{KIND_LABELS[issue.kind]}</Badge>
+          </div>
+          <p className="truncate text-[11px] text-ink-muted" title={issue.summary}>
+            {issue.summary}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <span className="w-16 text-center font-mono text-[10px] tabular-nums text-ink-faint">
+            {list.length > 0 ? `${index + 1} of ${list.length}` : examples.isLoading ? '…' : '0'}
+          </span>
+          <Button variant="ghost" size="sm" onClick={prev} disabled={index === 0} title="Previous event (←)">
+            <ChevronLeft className="size-3" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={next}
+            disabled={index >= list.length - 1}
+            title="Next event (→)"
+          >
+            <ChevronRight className="size-3" />
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onClose} title="Close (Esc)">
+            <X className="size-3" />
+          </Button>
+        </div>
+      </div>
+
+      {examples.isError && (
+        <div className="p-3">
+          <ErrorBox error={ipc.asIpcError(examples.error)} />
+        </div>
+      )}
+      {examples.isLoading && <Spinner label="Grading cached events…" />}
+      {examples.isSuccess && list.length === 0 && (
+        <EmptyState
+          title="No cached event shows this"
+          detail="The sample this analysis graded is no longer in the cache. Run the analysis again to fetch a fresh one."
+        />
+      )}
+
+      {current && (
+        <>
+          <div className="flex shrink-0 items-center gap-3 border-b border-edge/60 px-3 py-1.5 font-mono text-[10px] text-ink-faint">
+            <span className="truncate" title={current.id}>
+              {current.id}
+            </span>
+            <span className="ml-auto whitespace-nowrap">
+              {formatDateTime(current.timestamp, timeZone)}
+            </span>
+            <CopyButton text={text} title="Copy event detail" />
+          </div>
+          <pre className="min-h-0 flex-1 overflow-auto px-3 py-2 font-mono text-[11px] leading-snug text-ink-muted">
+            {text.split('\n').map((line, i) => (
+              <div
+                key={i}
+                className={cn(
+                  leaf && line.includes(`"${leaf}"`) && '-mx-3 bg-warn/15 px-3 text-ink',
+                )}
+              >
+                {line}
+              </div>
+            ))}
+          </pre>
+        </>
       )}
     </div>
   )

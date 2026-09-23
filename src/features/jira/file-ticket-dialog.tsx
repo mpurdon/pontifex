@@ -3,12 +3,15 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Bug, CheckCircle2, ExternalLink, MessageSquarePlus } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
 import type {
+  EventTicket,
   FiledTicket,
   IpcError,
   Issue,
   RequiredField,
   TicketContext,
 } from '@/lib/types'
+import { WikiPreview } from './wiki-preview'
+import { formatAge } from '@/lib/format'
 import {
   Badge,
   Button,
@@ -20,9 +23,17 @@ import {
   ModalDescription,
   ModalTitle,
   Note,
+  Segmented,
   Select,
   Spinner,
+  cn,
 } from '@/components/ui'
+
+/** Write the markup, or look at what it will become. */
+const BODY_TABS = [
+  { id: 'write' as const, label: 'Write' },
+  { id: 'preview' as const, label: 'Preview' },
+]
 
 /**
  * The id inside a stored field value, for driving a select.
@@ -66,17 +77,22 @@ function shapeText(field: RequiredField, text: string): unknown {
  */
 export function FileTicketDialog({
   open,
-  issue,
+  findings,
   context,
   onClose,
   onFiled,
 }: {
   open: boolean
-  issue: Issue | null
+  /**
+   * What the ticket is about: one finding from a row's File button, or every
+   * finding on the Analysis tab as a single roll-up. Empty means there is
+   * nothing to file and the dialog does not render.
+   */
+  findings: Issue[]
   context: TicketContext
   onClose: () => void
-  /** Lets the caller show the ticket key where the button was. */
-  onFiled: (issueKey: string, ticket: FiledTicket) => void
+  /** Lets the caller show the ticket key where the buttons were. */
+  onFiled: (issueKeys: string[], ticket: FiledTicket) => void
 }) {
   const [summary, setSummary] = useState('')
   const [description, setDescription] = useState('')
@@ -84,11 +100,13 @@ export function FileTicketDialog({
   /** Answers for whatever this project makes mandatory, keyed by field id. */
   const [fields, setFields] = useState<Record<string, unknown>>({})
   const [remember, setRemember] = useState(true)
+  const [bodyTab, setBodyTab] = useState<'write' | 'preview'>('write')
 
+  const keys = findings.map((finding) => finding.key)
   const preview = useQuery({
-    queryKey: ['jira', 'preview', context.schemaName, context.environment, issue?.key],
-    queryFn: () => ipc.previewJiraTicket(issue!, context),
-    enabled: open && !!issue,
+    queryKey: ['jira', 'preview', context.schemaName, context.environment, keys.join('|')],
+    queryFn: () => ipc.previewJiraTicket(findings, context),
+    enabled: open && findings.length > 0,
     retry: false,
     // Always re-render on open: the ticket describes a sample, and a stale
     // preview would file yesterday's numbers.
@@ -130,11 +148,7 @@ export function FileTicketDialog({
     (field) => !field.hasDefault && fields[field.fieldId] === undefined,
   )
 
-  const file = useMutation<
-    { issueKey: string; ticket: FiledTicket },
-    IpcError,
-    { commentOn?: string }
-  >({
+  const file = useMutation<{ ticket: FiledTicket }, IpcError, { commentOn?: string }>({
     mutationFn: async ({ commentOn }) => {
       // Saved before the write, so a rejected create does not also lose the
       // answers that took a trip to Jira's field metadata to discover.
@@ -143,7 +157,7 @@ export function FileTicketDialog({
       }
 
       const result = await ipc.fileJiraTicket({
-        issue: issue!,
+        issues: findings,
         context,
         summary,
         description,
@@ -162,22 +176,26 @@ export function FileTicketDialog({
           }
         )
       }
-      return { issueKey: issue!.key, ticket: result.ticket }
+      return { ticket: result.ticket }
     },
-    onSuccess: ({ issueKey, ticket }) => {
-      onFiled(issueKey, ticket)
+    onSuccess: ({ ticket }) => {
+      // Every finding the ticket covers, so a roll-up marks all of its rows
+      // rather than only the one that led it.
+      onFiled(keys, ticket)
       onClose()
     },
   })
 
-  if (!issue) return null
+  if (findings.length === 0) return null
   const existing = preview.data?.existing
 
   return (
     <Modal open={open} onClose={onClose} width={640} className="flex max-h-[85vh] flex-col p-4">
       <ModalTitle>
         <Bug className="size-4" />
-        File this with the producer team
+        {findings.length > 1
+          ? `File all ${findings.length} findings with the producer team`
+          : 'File this with the producer team'}
       </ModalTitle>
       <ModalDescription>
         Creates a Jira ticket in{' '}
@@ -194,6 +212,18 @@ export function FileTicketDialog({
 
       {preview.data && (
         <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
+          {/* Saying so rather than filing blind: without the check, an open
+              ticket for this exact problem would not be offered as somewhere
+              to comment, and this would quietly become the second one. */}
+          {preview.data.duplicateCheck && (
+            <Note tone="warn">
+              <span>
+                Could not check whether this is already filed (
+                {preview.data.duplicateCheck.message}). Filing may open a duplicate.
+              </span>
+            </Note>
+          )}
+
           {/* The duplicate check runs before the dialog is useful, because
               "file it again" is the wrong default when it is already filed. */}
           {existing && (
@@ -299,15 +329,38 @@ export function FileTicketDialog({
             </div>
           )}
 
-          <Field label="Description" hint="Jira wiki markup">
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={14}
-              spellCheck={false}
-              className="resize-none rounded-md border border-edge bg-surface-0 p-2 font-mono text-[11px] leading-relaxed text-ink focus:border-accent focus:outline-none"
-            />
-          </Field>
+          {/* Not a `Field`: that wraps its children in a label, and a tab
+              strip inside one is a button that steals the label's click. */}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-medium text-ink-muted">Description</span>
+              <Segmented
+                size="sm"
+                className="ml-auto"
+                value={bodyTab}
+                options={BODY_TABS}
+                onChange={setBodyTab}
+              />
+            </div>
+            {bodyTab === 'write' ? (
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={14}
+                spellCheck={false}
+                className="resize-none rounded-md border border-edge bg-surface-0 p-2 font-mono text-[11px] leading-relaxed text-ink focus:border-accent focus:outline-none"
+              />
+            ) : (
+              // Grows with the body rather than scrolling inside the dialog's
+              // own scroll: one scrollbar, and the footer stays pinned anyway.
+              <WikiPreview text={description} className="min-h-[17.5rem]" />
+            )}
+            <span className="text-[10px] text-ink-faint">
+              {bodyTab === 'write'
+                ? 'Jira wiki markup'
+                : 'Roughly as Jira will draw it. The markup is what gets filed.'}
+            </span>
+          </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[10px] text-ink-faint">Labels</span>
@@ -362,6 +415,39 @@ export function FileTicketDialog({
         </Button>
       </div>
     </Modal>
+  )
+}
+
+/**
+ * A ticket that exists in Jira, with where it stands.
+ *
+ * Status is the project's own word for it — "Shipped", "Blocked" — and the
+ * colour is Jira's three-way grouping of that word, which is the only part
+ * that means the same thing in every project.
+ */
+export function TicketChip({ ticket }: { ticket: EventTicket }) {
+  return (
+    <a
+      href={ticket.url}
+      target="_blank"
+      rel="noreferrer"
+      title={[
+        ticket.summary,
+        ticket.updated ? `moved ${formatAge(Date.now() - ticket.updated)} ago` : null,
+      ]
+        .filter(Boolean)
+        .join(' — ')}
+      className="shrink-0"
+    >
+      <Badge
+        tone={ticket.done ? 'neutral' : ticket.started ? 'info' : 'warn'}
+        className={cn('hover:bg-surface-3', ticket.done && 'line-through decoration-1')}
+      >
+        {ticket.key}
+        <span className="font-normal opacity-80">{ticket.status}</span>
+        <ExternalLink className="size-2.5" />
+      </Badge>
+    </a>
   )
 }
 

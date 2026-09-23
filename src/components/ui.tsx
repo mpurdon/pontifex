@@ -130,23 +130,41 @@ export function Field({
   )
 }
 
+/**
+ * A checkbox drawn from the theme's tokens.
+ *
+ * The native control takes `accent-color` and nothing else: under a dark
+ * colour scheme WebKit paints the unchecked box black whatever the surface
+ * is, which on blueprint paper looked like a hole. The input stays in the
+ * tree for behaviour, focus and assistive tech; the box beside it is what
+ * you see.
+ */
 export function Checkbox({
   label,
   className,
+  title,
   ...props
 }: React.InputHTMLAttributes<HTMLInputElement> & { label: ReactNode }) {
   return (
     <label
+      title={title}
       className={cn(
         'inline-flex cursor-pointer items-center gap-1.5 text-xs text-ink-muted',
+        props.disabled && 'cursor-not-allowed opacity-50',
         className,
       )}
     >
-      <input
-        type="checkbox"
-        {...props}
-        className="size-3.5 accent-accent"
-      />
+      <input type="checkbox" {...props} className="peer sr-only" />
+      <span
+        aria-hidden
+        className={cn(
+          'flex size-3.5 shrink-0 items-center justify-center rounded-sm border border-edge-strong bg-surface-1 transition-colors',
+          'peer-checked:border-accent peer-checked:bg-accent peer-checked:[&>svg]:opacity-100',
+          'peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-1 peer-focus-visible:outline-accent',
+        )}
+      >
+        <Check className="size-2.5 text-on-accent opacity-0" strokeWidth={3} />
+      </span>
       {label}
     </label>
   )

@@ -1,6 +1,8 @@
 use crate::aws::clients::map_sdk_error;
 use crate::error::Result;
+use crate::logging::cat;
 use crate::state::AppState;
+use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
@@ -75,9 +77,8 @@ pub struct LogQuery {
     pub detail_type: Option<String>,
     /// A raw filter pattern. Takes precedence over the structured filters.
     pub filter_pattern: Option<String>,
+    /// The most events to return; the newest matches win.
     pub limit: Option<i32>,
-    /// Continue a previous page.
-    pub next_token: Option<String>,
 }
 
 /// Compile the structured filters into a CloudWatch Logs JSON filter pattern.
@@ -151,10 +152,106 @@ pub struct LogEvent {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogPage {
+    /// Newest first.
     pub events: Vec<LogEvent>,
-    pub next_token: Option<String>,
     /// The pattern we actually sent, surfaced so the UI can show what ran.
     pub filter_pattern: Option<String>,
+    /// How far back the scan got, epoch milliseconds. Everything between here
+    /// and the end of the window was searched; nothing before it was.
+    pub searched_from: i64,
+    /// True when the whole window was searched.
+    pub complete: bool,
+    /// Why the scan stopped short, when it did.
+    pub scan_note: Option<String>,
+}
+
+/// How many slices are read at once. The report's stripes are wider; here
+/// the newest slices matter most, so a few at a time, newest first.
+const SLICE_CONCURRENCY: usize = 4;
+/// Pages followed within one slice before giving up on it.
+const MAX_PAGES: usize = 100;
+const PAGE_LIMIT: i32 = 2_000;
+
+/// The window cut into slices, newest first.
+///
+/// `FilterLogEvents` reads forward from its start time and stops when it has
+/// looked at enough data, matched or not, so one call over a week of a busy
+/// group looks at the first few hours and reports nothing. Reading the window
+/// in slices means every slice is finished before the next is begun, and the
+/// answer to "how far back did you look" is a time rather than a token.
+fn slices(start: i64, end: i64) -> Vec<(i64, i64)> {
+    const MIN: i64 = 5 * 60 * 1000;
+    const MAX: i64 = 6 * 60 * 60 * 1000;
+    let window = (end - start).max(1);
+    let width = (window / 16).clamp(MIN, MAX);
+    let mut out = Vec::new();
+    let mut to = end;
+    while to > start {
+        let from = (to - width).max(start);
+        out.push((from, to));
+        to = from;
+    }
+    out
+}
+
+/// One slice, read to the end or the page cap.
+async fn read_slice(
+    client: &aws_sdk_cloudwatchlogs::Client,
+    group: &str,
+    pattern: Option<&str>,
+    from: i64,
+    to: i64,
+) -> Result<(Vec<LogEvent>, bool)> {
+    let mut req = client
+        .filter_log_events()
+        .log_group_name(group)
+        .start_time(from)
+        .end_time(to)
+        .limit(PAGE_LIMIT);
+    if let Some(pattern) = pattern {
+        req = req.filter_pattern(pattern);
+    }
+    let mut out = Vec::new();
+    let mut token: Option<String> = None;
+    for page in 0..MAX_PAGES {
+        let response = req
+            .clone()
+            .set_next_token(token.take())
+            .send()
+            .await
+            .map_err(map_sdk_error)?;
+        out.extend(response.events().iter().map(log_event));
+        token = response.next_token().map(str::to_string);
+        if token.is_none() {
+            return Ok((out, true));
+        }
+        if page + 1 == MAX_PAGES {
+            lwarn!(cat::EVENTS, "{group}: a slice hit the {MAX_PAGES}-page cap");
+        }
+    }
+    Ok((out, false))
+}
+
+fn log_event(e: &aws_sdk_cloudwatchlogs::types::FilteredLogEvent) -> LogEvent {
+    let message = e.message().unwrap_or_default().to_string();
+    let parsed = serde_json::from_str::<Value>(&message).ok();
+    let get = |key: &str| {
+        parsed
+            .as_ref()
+            .and_then(|v| v.get(key))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    LogEvent {
+        timestamp: e.timestamp(),
+        ingestion_time: e.ingestion_time(),
+        log_stream: e.log_stream_name().map(str::to_string),
+        source: get("source"),
+        detail_type: get("detail-type"),
+        event_id: get("id"),
+        event: parsed,
+        message,
+    }
 }
 
 #[tauri::command]
@@ -167,61 +264,91 @@ pub async fn query_logs(
     let client = aws_sdk_cloudwatchlogs::Client::new(&cfg);
 
     let filter_pattern = build_filter_pattern(&query);
+    let limit = query.limit.unwrap_or(200).clamp(1, 10_000) as usize;
+    // Settings → Scanning owns the time budget, as it does for every scan.
+    let budget =
+        std::time::Duration::from_secs(state.settings_snapshot().await.scan.seconds_or(None));
+    let end = query.end_time.unwrap_or_else(crate::events_cache::now_ms);
+    let started = std::time::Instant::now();
 
-    let mut req = client
-        .filter_log_events()
-        .log_group_name(&query.log_group)
-        .start_time(query.start_time)
-        .limit(query.limit.unwrap_or(200).clamp(1, 10_000));
+    let plan = slices(query.start_time, end);
+    let mut events: Vec<LogEvent> = Vec::new();
+    let mut searched_from = end;
+    let mut complete = true;
+    let mut scan_note = None;
 
-    if let Some(end) = query.end_time {
-        req = req.end_time(end);
-    }
-    if let Some(pattern) = &filter_pattern {
-        req = req.filter_pattern(pattern);
-    }
-    if let Some(token) = &query.next_token {
-        req = req.next_token(token);
-    }
-
-    let out = req.send().await.map_err(map_sdk_error)?;
-
-    let events = out
-        .events()
-        .iter()
-        .map(|e| {
-            let message = e.message().unwrap_or_default().to_string();
-            let parsed = serde_json::from_str::<Value>(&message).ok();
-            let get = |key: &str| {
-                parsed
-                    .as_ref()
-                    .and_then(|v| v.get(key))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            };
-            LogEvent {
-                timestamp: e.timestamp(),
-                ingestion_time: e.ingestion_time(),
-                log_stream: e.log_stream_name().map(str::to_string),
-                source: get("source"),
-                detail_type: get("detail-type"),
-                event_id: get("id"),
-                event: parsed,
-                message,
+    for batch in plan.chunks(SLICE_CONCURRENCY) {
+        if events.len() >= limit {
+            complete = false;
+            scan_note = Some(format!(
+                "Showing the newest {limit} matches; continue for older ones"
+            ));
+            break;
+        }
+        if started.elapsed() >= budget {
+            complete = false;
+            scan_note = Some(format!(
+                "Stopped at the {}s scanning budget (Settings → Scanning); continue to search further back",
+                budget.as_secs()
+            ));
+            break;
+        }
+        let reads = batch.iter().map(|(from, to)| {
+            read_slice(
+                &client,
+                &query.log_group,
+                filter_pattern.as_deref(),
+                *from,
+                *to,
+            )
+        });
+        for (result, (from, _)) in join_all(reads).await.into_iter().zip(batch) {
+            let (found, whole) = result?;
+            events.extend(found);
+            if !whole {
+                scan_note = Some(
+                    "A slice was too dense to read fully; some events in it may be missing".into(),
+                );
             }
-        })
-        .collect();
+            searched_from = *from;
+        }
+    }
+
+    // Newest first, and no more than asked for.
+    events.sort_by_key(|e| std::cmp::Reverse(e.timestamp.unwrap_or(0)));
+    if events.len() > limit {
+        events.truncate(limit);
+        complete = false;
+    }
 
     Ok(LogPage {
         events,
-        next_token: out.next_token().map(str::to_string),
         filter_pattern,
+        searched_from,
+        complete,
+        scan_note,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slices_cover_the_window_newest_first() {
+        let hour = 60 * 60 * 1000;
+        let cut = slices(0, 7 * 24 * hour);
+        // 7 days at the 6h ceiling: 28 slices, the first ending at the end.
+        assert_eq!(cut.len(), 28);
+        assert_eq!(cut[0], (7 * 24 * hour - 6 * hour, 7 * 24 * hour));
+        assert_eq!(cut[27], (0, 6 * hour));
+        for pair in cut.windows(2) {
+            assert_eq!(pair[0].0, pair[1].1, "contiguous");
+        }
+        // A short window is not cut below five minutes.
+        let short = slices(0, 20 * 60 * 1000);
+        assert_eq!(short.len(), 4);
+    }
 
     fn query() -> LogQuery {
         LogQuery {
@@ -232,7 +359,6 @@ mod tests {
             detail_type: None,
             filter_pattern: None,
             limit: None,
-            next_token: None,
         }
     }
 

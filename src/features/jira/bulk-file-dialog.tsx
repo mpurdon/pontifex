@@ -106,7 +106,9 @@ export function BulkFileDialog({
       ipc.fileJiraTickets(
         rows
           .filter((row) => chosen.has(row.id))
-          .map((row) => ({ issue: row.issue, context: row.context })),
+          // One ticket per row here, deliberately: these are different
+          // schemas, so they are different producers' backlogs.
+          .map((row) => ({ issues: [row.issue], context: row.context })),
       ),
     onSuccess: setResults,
   })

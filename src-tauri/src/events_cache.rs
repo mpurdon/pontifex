@@ -249,6 +249,41 @@ impl EventCache {
         across
     }
 
+    /// The cached events themselves — id, time and detail — for one type
+    /// across an environment's log groups, newest first.
+    ///
+    /// [`sample_across`](Self::sample_across) hands out payloads for grading;
+    /// this is for showing a person the events, where the id and the time are
+    /// the part they will look up elsewhere.
+    pub async fn events_across(
+        &self,
+        env_id: &str,
+        log_groups: &[String],
+        source: &str,
+        detail_type: &str,
+        start: i64,
+        end: i64,
+    ) -> Vec<CachedEvent> {
+        let samples = self.samples.read().await;
+        let mut out: Vec<CachedEvent> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for group in log_groups {
+            let Some(sample) = samples.get(&cache_key(env_id, group, source, detail_type)) else {
+                continue;
+            };
+            for event in &sample.events {
+                if event.timestamp >= start
+                    && event.timestamp <= end
+                    && seen.insert(event.id.clone())
+                {
+                    out.push(event.clone());
+                }
+            }
+        }
+        out.sort_by_key(|e| std::cmp::Reverse(e.timestamp));
+        out
+    }
+
     /// Every event source seen in this environment's sampled traffic.
     ///
     /// Read off the cache rather than the registry, because the two disagree

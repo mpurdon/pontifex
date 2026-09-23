@@ -100,7 +100,13 @@ pub struct TicketDraft {
     /// Values for fields the target project makes mandatory.
     pub fields: std::collections::BTreeMap<String, Value>,
     /// Identifies this exact problem across runs, as a label.
+    ///
+    /// Carried only to find tickets filed before the labels were readable;
+    /// nothing is filed with it any more. See [`identifying_labels`].
     pub fingerprint: String,
+    /// The labels that identify what this ticket is about, all of which an
+    /// open ticket must carry to count as the same problem.
+    pub identity: Vec<String>,
     pub assignee_account_id: Option<String>,
     /// Why this project — shown in the preview so routing is auditable.
     pub routed_by: String,
@@ -108,6 +114,72 @@ pub struct TicketDraft {
 
 /// Label prefix that marks a ticket as one of ours.
 pub const TICKET_LABEL: &str = "pontifex";
+
+/// A label Jira will accept, and a person can read.
+///
+/// Jira allows up to 255 characters and no spaces — a space would be read as
+/// the separator between two labels, so `Atomic Forms` would arrive as
+/// `Atomic` and `Forms`. Brackets go too: an array path reads better as
+/// `callAttemptHistory.result` than `callAttemptHistory[].result`, and the
+/// `[]` carries nothing a label needs to say.
+pub(crate) fn label(text: &str) -> String {
+    let cleaned: String = text
+        .trim()
+        .replace("[]", "")
+        .chars()
+        .map(|c| if c.is_whitespace() { '-' } else { c })
+        .collect();
+    cleaned.chars().take(255).collect()
+}
+
+/// The bus these events were read from, named the way the rest of the app
+/// names it — stage included, because the same event type on dev and on prd
+/// are two different conversations.
+fn bus_name(context: &TicketContext) -> String {
+    bus_label(&context.environment)
+}
+
+/// The bus label for an environment, for a search that spans schemas rather
+/// than asking about one.
+pub fn bus_label(environment: &str) -> String {
+    label(&format!("{environment}-global-bus"))
+}
+
+/// The labels every ticket about this event type carries, whatever finding it
+/// is about — so "what has been filed about this" is one search.
+pub fn event_labels(context: &TicketContext) -> Vec<String> {
+    identifying_labels(&[], context)
+}
+
+/// The labels that say what a ticket is about, worst-to-least specific.
+///
+/// These are the ticket's identity as well as its description: the duplicate
+/// check searches for an open ticket carrying all of them, so a reader and a
+/// JQL query agree on what "the same problem" means. A ticket about one
+/// finding names the field; a roll-up covering several names all of their
+/// fields, and is found by any one of them.
+fn identifying_labels(findings: &[Issue], context: &TicketContext) -> Vec<String> {
+    let mut labels = vec![
+        TICKET_LABEL.to_string(),
+        label(&bus_name(context)),
+        label(&context.source),
+    ];
+    if !context.detail_type.is_empty() {
+        labels.push(label(&context.detail_type));
+    }
+    for finding in findings {
+        // The payload as a whole is not a field, and an issue about it is
+        // already named by the three labels above.
+        if finding.path.is_empty() {
+            continue;
+        }
+        let field = label(&finding.path);
+        if !labels.contains(&field) {
+            labels.push(field);
+        }
+    }
+    labels
+}
 
 /// Strip the code marks the summaries carry.
 ///
@@ -168,31 +240,15 @@ fn wiki_link(repo: &str, path: &str, url: &str) -> String {
     format!("[{repo}/{path}|{url}]")
 }
 
-/// The ticket body, in Jira wiki markup.
-pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
-    let mut out = String::new();
-
-    out.push_str(&format!(
-        "The producer of {} {} on the {} event bus.\n\n",
-        context.source,
-        kind_phrase(issue.kind),
-        context.environment,
-    ));
-
-    out.push_str("h3. What is wrong\n");
-    out.push_str(&format!("{}\n\n", plain(&issue.summary)));
-
+/// The evidence bullets that are about one finding: how much traffic it
+/// affects, which field, what the two sides say, and who downstream cares.
+///
+/// Separate from [`where_found`] because a roll-up ticket says where it was
+/// found once and then repeats these per finding.
+fn finding_evidence(issue: &Issue, context: &TicketContext, out: &mut String) {
     // A concern is a person's words, not a validator's finding: there is no
     // count of affected events and no verdict from the schema.
     let concern = issue.kind == IssueKind::Concern;
-    out.push_str(if concern {
-        "h3. Details\n"
-    } else {
-        "h3. What to do\n"
-    });
-    out.push_str(&format!("{}\n\n", plain(&issue.action)));
-
-    out.push_str("h3. Evidence\n");
     if !concern {
         out.push_str(&format!(
             "* Observed in *{} of {} sampled events* over {}\n",
@@ -201,10 +257,6 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
             describe_window(context.minutes),
         ));
     }
-    out.push_str(&format!(
-        "* Source: {{{{{}}}}} / detail-type {{{{{}}}}}\n",
-        context.source, context.detail_type,
-    ));
     if !issue.path.is_empty() {
         out.push_str(&format!("* Field: {{{{{}}}}}\n", issue.path));
     }
@@ -216,30 +268,40 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
     }
     // The lines that decide urgency for whoever picks this up: whether the
     // bus is throwing the events away, and who downstream reads the field.
-    if !concern {
-        out.push_str(if issue.rejects {
-            "* *The registered schema rejects these events.* EventBridge still delivers them; the bus's schema validator alerts on failures rather than blocking.\n"
-        } else {
-            "* The schema does not reject these events — it is out of date, not broken.\n"
-        });
-        if let Some(impact) = &issue.impact {
-            out.push_str(&match (impact.readers.len(), impact.indirect.len()) {
-                (0, 0) => format!(
-                    "* None of the {} consumer file(s) found reads this field.\n",
-                    impact.handlers
-                ),
-                (0, n) => format!(
-                    "* {n} of the {} consumer file(s) found pass this field's parent along whole, so whether they read it is not visible — listed below.\n",
-                    impact.handlers
-                ),
-                (n, _) => format!(
-                    "* *Read by {n} of the {} consumer file(s) found — listed below.*\n",
-                    impact.handlers
-                ),
-            });
-        }
+    if concern {
+        return;
     }
-    if issue.kind == IssueKind::Unregistered {
+    out.push_str(if issue.rejects {
+        "* *The registered schema rejects these events.* EventBridge still delivers them; the bus's schema validator alerts on failures rather than blocking.\n"
+    } else {
+        "* The schema does not reject these events — it is out of date, not broken.\n"
+    });
+    if let Some(impact) = &issue.impact {
+        out.push_str(&match (impact.readers.len(), impact.indirect.len()) {
+            (0, 0) => format!(
+                "* None of the {} consumer file(s) found reads this field.\n",
+                impact.handlers
+            ),
+            (0, n) => format!(
+                "* {n} of the {} consumer file(s) found pass this field's parent along whole, so whether they read it is not visible — listed below.\n",
+                impact.handlers
+            ),
+            (n, _) => format!(
+                "* *Read by {n} of the {} consumer file(s) found — listed below.*\n",
+                impact.handlers
+            ),
+        });
+    }
+}
+
+/// Where the events were sampled from and what they were graded against —
+/// true of every finding in the ticket, so written once however many there are.
+fn where_found(context: &TicketContext, unregistered: bool, out: &mut String) {
+    out.push_str(&format!(
+        "* Source: {{{{{}}}}} / detail-type {{{{{}}}}}\n",
+        context.source, context.detail_type,
+    ));
+    if unregistered {
         out.push_str(&format!(
             "* Schema: none registered — it would be named {{{{{}}}}}\n",
             context.schema_name
@@ -262,29 +324,40 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
         out.push_str(&format!("* Sampled from: {{{{{log_group}}}}}\n"));
     }
     out.push('\n');
+}
 
-    if let Some(origin) = &context.origin {
-        out.push_str(if origin.publisher {
-            "h3. Publisher\n"
+/// Who publishes this event type, when the origin lookup found them.
+fn publisher_block(context: &TicketContext, level: &str, out: &mut String) {
+    let Some(origin) = &context.origin else {
+        return;
+    };
+    out.push_str(&format!(
+        "{level}. {}\n",
+        if origin.publisher {
+            "Publisher"
         } else {
-            "h3. Where it appears\n"
-        });
-        out.push_str(&format!(
-            "* {}\n",
-            wiki_link(&origin.repo, &origin.path, &origin.url)
-        ));
-        if !origin.owners.is_empty() {
-            out.push_str(&format!("* Owned by {}\n", origin.owners.join(", ")));
+            "Where it appears"
         }
-        if let Some(by) = &origin.introduced_by {
-            match &origin.pull_url {
-                Some(url) => out.push_str(&format!("* First published by {by} in [{url}]\n")),
-                None => out.push_str(&format!("* First published by {by}\n")),
-            }
-        }
-        out.push('\n');
+    ));
+    out.push_str(&format!(
+        "* {}\n",
+        wiki_link(&origin.repo, &origin.path, &origin.url)
+    ));
+    if !origin.owners.is_empty() {
+        out.push_str(&format!("* Owned by {}\n", origin.owners.join(", ")));
     }
+    if let Some(by) = &origin.introduced_by {
+        match &origin.pull_url {
+            Some(url) => out.push_str(&format!("* First published by {by} in [{url}]\n")),
+            None => out.push_str(&format!("* First published by {by}\n")),
+        }
+    }
+    out.push('\n');
+}
 
+/// The consumer files behind the impact line, the example value, and the
+/// validator's own words — everything a finding carries below its evidence.
+fn finding_detail(issue: &Issue, out: &mut String) {
     if let Some(impact) = &issue.impact {
         for (heading, files) in [
             ("h3. Consumers that read this field\n", &impact.readers),
@@ -324,26 +397,189 @@ pub fn render_description(issue: &Issue, context: &TicketContext) -> String {
         out.push_str("h3. Validator\n");
         out.push_str(&format!("{{quote}}{}{{quote}}\n\n", message));
     }
+}
 
-    out.push_str(if concern {
+/// How a ticket signs off, which depends on who found the problem.
+fn footer(findings: &[Issue]) -> &'static str {
+    if findings.iter().all(|i| i.kind == IssueKind::Concern) {
         "----\nFiled from Pontifex by someone reviewing this schema against real events on the bus.\n"
     } else {
         "----\nFiled from Pontifex, which sampled real events off the bus and compared them with the registered schema.\n"
+    }
+}
+
+/// The ticket body, in Jira wiki markup.
+///
+/// One finding or several. A ticket about several says the shared part once —
+/// who publishes this event type, which schema, which sample — and then each
+/// finding in full, in the sections it would have had as a ticket of its own.
+/// That is the difference between one ticket a producer team can act on and
+/// eight tickets that arrive together and repeat each other.
+pub fn render_description(findings: &[Issue], context: &TicketContext) -> String {
+    match findings {
+        [] => String::new(),
+        [single] => single_description(single, context),
+        many => rollup_description(many, context),
+    }
+}
+
+fn single_description(issue: &Issue, context: &TicketContext) -> String {
+    let mut out = String::new();
+
+    out.push_str(&format!(
+        "The producer of {} {} on the {} event bus.\n\n",
+        context.source,
+        kind_phrase(issue.kind),
+        context.environment,
+    ));
+
+    out.push_str("h3. What is wrong\n");
+    out.push_str(&format!("{}\n\n", plain(&issue.summary)));
+
+    out.push_str(if issue.kind == IssueKind::Concern {
+        "h3. Details\n"
+    } else {
+        "h3. What to do\n"
     });
+    out.push_str(&format!("{}\n\n", plain(&issue.action)));
+
+    out.push_str("h3. Evidence\n");
+    finding_evidence(issue, context, &mut out);
+    where_found(context, issue.kind == IssueKind::Unregistered, &mut out);
+
+    publisher_block(context, "h3", &mut out);
+    finding_detail(issue, &mut out);
+    out.push_str(footer(std::slice::from_ref(issue)));
+    out
+}
+
+/// Every finding about one event type, in one ticket.
+fn rollup_description(findings: &[Issue], context: &TicketContext) -> String {
+    let mut out = String::new();
+    let rejecting = findings.iter().filter(|i| i.rejects).count();
+
+    out.push_str(&format!(
+        "The producer of {} publishes {} events that disagree with the registered schema in {} ways on the {} event bus.{}\n\n",
+        context.source,
+        context.detail_type,
+        findings.len(),
+        context.environment,
+        match rejecting {
+            0 => String::new(),
+            n => format!(
+                " *{n} of them {} events the bus's validator rejects.*",
+                if n == 1 { "produces" } else { "produce" }
+            ),
+        },
+    ));
+
+    // Numbered, in the order the panel ranked them, so the list doubles as a
+    // table of contents for the sections below.
+    out.push_str("h2. What is wrong\n");
+    for issue in findings {
+        out.push_str(&format!(
+            "# {}{}\n",
+            plain(&issue.summary),
+            if issue.kind == IssueKind::Concern {
+                String::new()
+            } else {
+                format!(
+                    " — {} of {} events{}",
+                    issue.affected,
+                    issue.sampled,
+                    if issue.rejects { ", rejected" } else { "" }
+                )
+            },
+        ));
+    }
+    out.push('\n');
+
+    out.push_str("h2. Where this was found\n");
+    where_found(
+        context,
+        findings.iter().any(|i| i.kind == IssueKind::Unregistered),
+        &mut out,
+    );
+    publisher_block(context, "h2", &mut out);
+
+    // Each finding in full, so this ticket says everything the eight separate
+    // ones would have said.
+    for (position, issue) in findings.iter().enumerate() {
+        out.push_str(&format!(
+            "h2. {} of {}: {}\n\n",
+            position + 1,
+            findings.len(),
+            plain(&issue.summary),
+        ));
+        out.push_str(if issue.kind == IssueKind::Concern {
+            "h3. Details\n"
+        } else {
+            "h3. What to do\n"
+        });
+        out.push_str(&format!("{}\n\n", plain(&issue.action)));
+        out.push_str("h3. Evidence\n");
+        finding_evidence(issue, context, &mut out);
+        out.push('\n');
+        finding_detail(issue, &mut out);
+    }
+
+    out.push_str(footer(findings));
     out
 }
 
 /// The one-line title: names the producer first, because that is who this is for.
-pub fn render_summary(issue: &Issue, context: &TicketContext) -> String {
-    format!("[{}] {}", context.source, plain(&issue.summary))
+///
+/// A roll-up cannot lead with one finding's summary without misrepresenting
+/// the other seven, so it counts them and names the event type instead.
+pub fn render_summary(findings: &[Issue], context: &TicketContext) -> String {
+    match findings {
+        [single] => format!("[{}] {}", context.source, plain(&single.summary)),
+        many => {
+            let rejecting = many.iter().filter(|i| i.rejects).count();
+            format!(
+                "[{}] {} schema findings on {}{}",
+                context.source,
+                many.len(),
+                if context.detail_type.is_empty() {
+                    context.schema_name.as_str()
+                } else {
+                    context.detail_type.as_str()
+                },
+                match rejecting {
+                    0 => String::new(),
+                    // Grammatical either way: one finding causes rejections,
+                    // three of them cause rejections.
+                    n => format!(" ({n} {} rejections)", if n == 1 { "causes" } else { "cause" }),
+                },
+            )
+        }
+    }
 }
 
+/// The issue-key component a roll-up fingerprints under.
+///
+/// Constant, so every roll-up filed for the same event type in the same
+/// environment is the same ticket: findings come and go between samples, and
+/// "the state of this contract" is one conversation, not a new ticket each
+/// time the list changes. No [`Issue::key`] can collide with it — they are all
+/// either `kind:path` or the bare word `unregistered`.
+const ROLLUP_KEY: &str = "rollup";
+
 /// Build the ticket, or explain why it cannot be routed.
+///
+/// `findings` is everything the ticket is about: one entry for a row's own
+/// File button, several for the roll-up the Analysis tab files when an event
+/// type has more than one thing wrong with it.
 pub fn draft(
-    issue: &Issue,
+    findings: &[Issue],
     context: &TicketContext,
     settings: &JiraSettings,
 ) -> Result<TicketDraft> {
+    let [first, rest @ ..] = findings else {
+        return Err(Error::Invalid(
+            "A ticket needs at least one finding to be about.".into(),
+        ));
+    };
     let Routed {
         project_key,
         issue_type,
@@ -360,14 +596,18 @@ pub fn draft(
         },
     )?;
 
-    let fingerprint = fingerprint(&context.environment, &context.schema_name, &issue.key);
+    let key = if rest.is_empty() {
+        first.key.as_str()
+    } else {
+        ROLLUP_KEY
+    };
 
-    // Deduplicated and ordered: the fingerprint has to be present exactly once
-    // for the dedupe search to be reliable.
-    let mut labels = vec![TICKET_LABEL.to_string(), fingerprint.clone()];
-    labels.push(format!("{TICKET_LABEL}-{}", context.environment));
-    for label in settings.labels.iter().chain(route_labels.iter()) {
-        let cleaned = label.trim().replace(' ', "-");
+    let identity = identifying_labels(findings, context);
+    let mut labels = identity.clone();
+    // Whatever the routing rule and the settings add on top — deduplicated,
+    // because a label repeated is a label Jira will reject or fold.
+    for extra in settings.labels.iter().chain(route_labels.iter()) {
+        let cleaned = label(extra);
         if !cleaned.is_empty() && !labels.contains(&cleaned) {
             labels.push(cleaned);
         }
@@ -384,11 +624,12 @@ pub fn draft(
     Ok(TicketDraft {
         project_key,
         issue_type,
-        summary: render_summary(issue, context),
-        description: render_description(issue, context),
+        summary: render_summary(findings, context),
+        description: render_description(findings, context),
         labels,
         fields,
-        fingerprint,
+        fingerprint: fingerprint(&context.environment, &context.schema_name, key),
+        identity,
         assignee_account_id,
         routed_by: reason,
     })
@@ -476,7 +717,7 @@ mod tests {
 
     #[test]
     fn the_title_names_the_producer_and_drops_the_code_marks() {
-        let summary = render_summary(&issue(), &context());
+        let summary = render_summary(&[issue()], &context());
         assert_eq!(
             summary,
             "[orders-fulfilment] callAttemptCount is declared integer but 4% of events send string",
@@ -486,7 +727,7 @@ mod tests {
 
     #[test]
     fn the_body_carries_what_a_producer_team_needs_to_act() {
-        let body = render_description(&issue(), &context());
+        let body = render_description(&[issue()], &context());
         assert!(body.contains("7 of 200 sampled events"), "{body}");
         assert!(body.contains("the last 1 day(s)"), "{body}");
         assert!(body.contains("orders-fulfilment"), "{body}");
@@ -506,13 +747,13 @@ mod tests {
             example: Some(json!("")),
             ..issue()
         };
-        let body = render_description(&empty, &context());
+        let body = render_description(std::slice::from_ref(&empty), &context());
         assert!(body.contains("{code}\n\"\"\n{code}"), "{body}");
     }
 
     #[test]
     fn the_body_says_whether_events_are_being_thrown_away() {
-        let rejecting = render_description(&issue(), &context());
+        let rejecting = render_description(&[issue()], &context());
         assert!(rejecting.contains("The registered schema rejects these events"));
         assert!(rejecting.contains("still delivers"), "{rejecting}");
 
@@ -520,7 +761,7 @@ mod tests {
             rejects: false,
             ..issue()
         };
-        let body = render_description(&drifting, &context());
+        let body = render_description(std::slice::from_ref(&drifting), &context());
         assert!(body.contains("does not reject"), "{body}");
     }
 
@@ -540,7 +781,7 @@ mod tests {
             }),
             ..issue()
         };
-        let body = render_description(&read, &context());
+        let body = render_description(std::slice::from_ref(&read), &context());
         assert!(
             body.contains("Read by 1 of the 3 consumer file(s)"),
             "{body}"
@@ -562,7 +803,7 @@ mod tests {
             }),
             ..issue()
         };
-        let body = render_description(&unread, &context());
+        let body = render_description(std::slice::from_ref(&unread), &context());
         assert!(
             body.contains("None of the 3 consumer file(s) found reads this field"),
             "{body}"
@@ -570,27 +811,211 @@ mod tests {
         assert!(!body.contains("h3. Consumers"), "{body}");
     }
 
+    /// A second, different finding about the same event type.
+    fn blank_field() -> Issue {
+        Issue {
+            key: "emptyRequired:clientId".into(),
+            kind: IssueKind::EmptyRequired,
+            severity: IssueSeverity::Warning,
+            path: "clientId".into(),
+            summary: "`clientId` is required but blank in 31% of events".into(),
+            action: "Require at least one character in `clientId`.".into(),
+            declared: Some("required".into()),
+            observed: Some("blank in 62/200".into()),
+            affected: 62,
+            sampled: 200,
+            rejects: false,
+            example: Some(json!("")),
+            message: None,
+            fix: None,
+            impact: None,
+        }
+    }
+
     #[test]
-    fn routes_to_the_owning_project_and_labels_it_for_dedupe() {
-        let draft = draft(&issue(), &context(), &settings()).unwrap();
+    fn a_roll_up_carries_every_finding_in_full() {
+        let body = render_description(&[issue(), blank_field()], &context());
+
+        // The list up top, then a section per finding.
+        assert!(body.contains("h2. What is wrong"), "{body}");
+        assert!(body.contains("# callAttemptCount is declared integer"), "{body}");
+        assert!(body.contains("# clientId is required but blank"), "{body}");
+        assert!(body.contains("h2. 1 of 2:"), "{body}");
+        assert!(body.contains("h2. 2 of 2:"), "{body}");
+
+        // Everything the two separate tickets would have said about each.
+        assert!(body.contains("Fix the producer, or redeclare"), "{body}");
+        assert!(body.contains("Require at least one character"), "{body}");
+        assert!(body.contains("7 of 200 sampled events"), "{body}");
+        assert!(body.contains("62 of 200 sampled events"), "{body}");
+        assert!(body.contains("{code}\n\"14\"\n{code}"), "{body}");
+        assert!(body.contains("{code}\n\"\"\n{code}"), "{body}");
+        assert!(body.contains("is not of type"), "{body}");
+        assert!(
+            body.contains("The registered schema rejects these events"),
+            "{body}"
+        );
+        assert!(body.contains("does not reject these events"), "{body}");
+    }
+
+    #[test]
+    fn a_roll_up_says_the_shared_part_once() {
+        let body = render_description(&[issue(), blank_field()], &context());
+        for shared in [
+            "* Source: {{orders-fulfilment}} / detail-type {{lead-unreached}}",
+            "* Schema: {{orders-fulfilment@lead-unreached}}, validated against {{LeadUnreached}}",
+            "* Registry: {{prd-global-registry}}",
+            "* Sampled from: {{/aws/events/prd-global-events}}",
+        ] {
+            assert_eq!(
+                body.matches(shared).count(),
+                1,
+                "expected `{shared}` exactly once in:\n{body}"
+            );
+        }
+        // And the count of findings, so the first line says what this is.
+        assert!(body.contains("in 2 ways"), "{body}");
+        assert!(body.contains("*1 of them produces events"), "{body}");
+    }
+
+    #[test]
+    fn the_roll_up_title_counts_the_findings_rather_than_picking_one() {
+        let summary = render_summary(&[issue(), blank_field()], &context());
+        assert_eq!(
+            summary,
+            "[orders-fulfilment] 2 schema findings on lead-unreached (1 causes rejections)",
+        );
+        // One finding still speaks for itself.
+        assert!(render_summary(&[issue()], &context()).contains("callAttemptCount"));
+    }
+
+    #[test]
+    fn a_roll_up_names_every_field_it_covers_once() {
+        // Each covered field is how a reader finds this ticket, and how the
+        // duplicate check finds it when one of those fields is filed alone.
+        let rollup = draft(&[issue(), blank_field()], &context(), &settings()).unwrap();
+        assert_eq!(
+            rollup.labels,
+            vec![
+                "pontifex",
+                "prd-global-bus",
+                "orders-fulfilment",
+                "lead-unreached",
+                "callAttemptCount",
+                "clientId",
+                "producer-bug",
+            ],
+        );
+
+        // Two problems with the same field are one label, not two.
+        let same_field = Issue {
+            key: "emptyRequired:callAttemptCount".into(),
+            kind: IssueKind::EmptyRequired,
+            path: "callAttemptCount".into(),
+            ..issue()
+        };
+        let repeated = draft(&[issue(), same_field], &context(), &settings()).unwrap();
+        assert_eq!(
+            repeated
+                .labels
+                .iter()
+                .filter(|l| *l == "callAttemptCount")
+                .count(),
+            1,
+            "{:?}",
+            repeated.labels,
+        );
+    }
+
+    #[test]
+    fn a_label_is_something_jira_will_accept_and_a_person_can_read() {
+        let awkward = TicketContext {
+            // Registered as `Atomic-Forms`, but the events carry the space.
+            source: "Atomic Forms".into(),
+            ..context()
+        };
+        let nested = Issue {
+            path: "callAttemptHistory[].result".into(),
+            ..issue()
+        };
+        // The routing rule matches `orders-*`, so this source needs the
+        // default project rather than a rule.
+        let routed = JiraSettings {
+            default_project: Some("TRIAGE".into()),
+            ..settings()
+        };
+        let draft = draft(&[nested], &awkward, &routed).unwrap();
+
+        // A space would arrive at Jira as two labels, and the array marker
+        // says nothing a reader needs.
+        assert!(draft.labels.contains(&"Atomic-Forms".to_string()), "{:?}", draft.labels);
+        assert!(
+            draft.labels.contains(&"callAttemptHistory.result".to_string()),
+            "{:?}",
+            draft.labels,
+        );
+        assert!(draft.labels.iter().all(|l| !l.contains(' ') && l.len() <= 255));
+    }
+
+    #[test]
+    fn a_problem_with_no_field_is_labelled_by_its_event_type_alone() {
+        let whole_payload = Issue {
+            key: "unregistered".into(),
+            kind: IssueKind::Unregistered,
+            path: String::new(),
+            ..issue()
+        };
+        let draft = draft(&[whole_payload], &context(), &settings()).unwrap();
+        assert_eq!(
+            draft.identity,
+            vec![
+                "pontifex",
+                "prd-global-bus",
+                "orders-fulfilment",
+                "lead-unreached",
+            ],
+        );
+        assert!(draft.labels.iter().all(|l| !l.is_empty()));
+    }
+
+    #[test]
+    fn a_ticket_about_nothing_is_refused() {
+        let error = draft(&[], &context(), &settings()).unwrap_err();
+        assert!(error.to_string().contains("at least one finding"), "{error}");
+    }
+
+    #[test]
+    fn routes_to_the_owning_project_and_says_what_the_ticket_is_about() {
+        let draft = draft(&[issue()], &context(), &settings()).unwrap();
         assert_eq!(draft.project_key, "IPP");
         assert_eq!(draft.issue_type, "Bug");
-        assert!(draft.labels.contains(&"pontifex".to_string()));
-        assert!(draft.labels.contains(&"pontifex-prd".to_string()));
-        assert!(draft.labels.contains(&"producer-bug".to_string()));
-        // `<label>-<12 hex chars>` — the fingerprint label.
-        let fingerprint_len = TICKET_LABEL.len() + 1 + 12;
-        assert!(draft
-            .labels
-            .iter()
-            .any(|l| l.starts_with("pontifex-") && l.len() == fingerprint_len));
+        // The bus (stage included), the producer, the event type, the field —
+        // and the rule's own label last.
+        assert_eq!(
+            draft.labels,
+            vec![
+                "pontifex",
+                "prd-global-bus",
+                "orders-fulfilment",
+                "lead-unreached",
+                "callAttemptCount",
+                "producer-bug",
+            ],
+        );
+        // Every one of them readable: no hashes reach a producer's backlog.
+        assert!(
+            !draft.labels.iter().any(|l| l.len() == TICKET_LABEL.len() + 13
+                && l.trim_start_matches("pontifex-").chars().all(|c| c.is_ascii_hexdigit())),
+            "{:?}",
+            draft.labels,
+        );
         assert!(draft.routed_by.contains("orders-*"), "{}", draft.routed_by);
     }
 
     #[test]
     fn refuses_to_guess_when_nothing_routes_the_source() {
         let unrouted = JiraSettings::default();
-        let error = draft(&issue(), &context(), &unrouted).unwrap_err();
+        let error = draft(&[issue()], &context(), &unrouted).unwrap_err();
         assert!(error.to_string().contains("orders-fulfilment"), "{error}");
         assert!(error.to_string().contains("Settings → Jira"), "{error}");
     }
@@ -613,13 +1038,13 @@ mod tests {
             default_project: Some("TRIAGE".into()),
             ..JiraSettings::default()
         };
-        let draft = draft(&issue(), &context(), &settings).unwrap();
+        let draft = draft(&[issue()], &context(), &settings).unwrap();
         assert!(draft.labels.contains(&"event-bus".to_string()));
     }
 
     #[test]
     fn the_create_payload_is_shaped_the_way_rest_v2_wants_it() {
-        let draft = draft(&issue(), &context(), &settings()).unwrap();
+        let draft = draft(&[issue()], &context(), &settings()).unwrap();
         let fields = to_fields(&draft);
         assert_eq!(fields["fields"]["project"]["key"], "IPP");
         assert_eq!(fields["fields"]["issuetype"]["name"], "Bug");

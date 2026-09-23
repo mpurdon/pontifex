@@ -10,6 +10,7 @@ use crate::schema::repair::Repair;
 use crate::schema::{ajv, openapi};
 use serde::Serialize;
 use serde_json::{Map, Value};
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Why one sampled event failed validation.
@@ -559,7 +560,7 @@ pub fn check_events(
         .map_err(|e| Error::Invalid(format!("Schema cannot be compiled for validation: {e}")))?;
 
     let mut passed = 0usize;
-    let mut grouped: BTreeMap<(String, String), (FailureGroup, FailureClass)> = BTreeMap::new();
+    let mut grouped: BTreeMap<FailureClass, FailureGroup> = BTreeMap::new();
 
     let mut observed: BTreeMap<String, Observation> = BTreeMap::new();
 
@@ -571,29 +572,29 @@ pub fn check_events(
         for error in validator.iter_errors(payload) {
             valid = false;
             let pointer = error.instance_path.to_string();
-            // Group on *where in the schema* the check failed, not on the
-            // rendered message: the message embeds the offending value, so
-            // grouping by text would split one recurring problem into one
-            // row per event.
-            let key = (pointer.clone(), error.schema_path.to_string());
-            match grouped.get_mut(&key) {
-                Some(entry) => entry.0.count += 1,
-                None => {
+            // Group on what the check was *about* — which constraint failed,
+            // at which path, naming which property — not on the rendered
+            // message: the message embeds the offending value, so grouping by
+            // text would split one recurring problem into one row per event.
+            //
+            // Classifying every error rather than only the first is what keeps
+            // two required properties apart. The validator reports both at the
+            // pointer of the object that lacks them, under the same `required`
+            // keyword, so a key built from those alone folded them into one
+            // group that counted both and named one — and the field that won
+            // the name was then reported as rejecting every event in the
+            // sample, while the other was reported as rejecting none.
+            match grouped.entry(classify_failure(&error, &pointer)) {
+                Entry::Occupied(mut entry) => entry.get_mut().count += 1,
+                Entry::Vacant(entry) => {
                     // Only the first occurrence keeps its message and example,
                     // so rendering them for all 5000 was work thrown away.
-                    let class = classify_failure(&error, &pointer);
-                    grouped.insert(
-                        key,
-                        (
-                            FailureGroup {
-                                pointer,
-                                message: error.to_string(),
-                                count: 1,
-                                example: Some(error.instance.clone().into_owned()),
-                            },
-                            class,
-                        ),
-                    );
+                    entry.insert(FailureGroup {
+                        pointer,
+                        message: error.to_string(),
+                        count: 1,
+                        example: Some(error.instance.clone().into_owned()),
+                    });
                 }
             }
         }
@@ -734,7 +735,31 @@ pub fn check_events(
     }
 
     for (path, field) in &declared {
-        if !observed.contains_key(path) {
+        if observed.contains_key(path) {
+            continue;
+        }
+        // A required field nobody sends at all is the worst case of
+        // `missing_required`, not a quiet field: the bus rejects every one of
+        // those events. Filing it under `unused` graded a field absent from
+        // 100% of traffic as a note, below the same field absent from 50% —
+        // and gave it an issue key that changed with the sample, so the events
+        // behind the finding could never be found again.
+        //
+        // Only where there was something to hold it, though: a required
+        // property of an object no event carries is not itself missing. Its
+        // parent is, and that is the row worth showing.
+        let parent_sent = match path.rsplit_once('.') {
+            Some((parent, _)) => observed.contains_key(parent),
+            None => sampled > 0,
+        };
+        if field.required && parent_sent {
+            drift.missing_required.push(FieldObservation {
+                path: path.clone(),
+                types: Vec::new(),
+                seen_in: 0,
+                example: None,
+            });
+        } else {
             drift.unused.push(UnusedField {
                 path: path.clone(),
                 required: field.required,
@@ -755,7 +780,10 @@ pub fn check_events(
         .sort_by(|a, b| b.empty_in.cmp(&a.empty_in).then(a.path.cmp(&b.path)));
     drift.unused.sort_by(|a, b| a.path.cmp(&b.path));
 
-    let classified: Vec<(FailureGroup, FailureClass)> = grouped.into_values().collect();
+    let classified: Vec<(FailureGroup, FailureClass)> = grouped
+        .into_iter()
+        .map(|(class, group)| (group, class))
+        .collect();
     let issues = build_issues(&drift, &classified, sampled);
 
     let mut failures: Vec<FailureGroup> = classified.into_iter().map(|(f, _)| f).collect();
@@ -784,8 +812,11 @@ pub fn check_events(
 }
 
 /// What a validation failure is *about*, so it can be matched to the drift item
-/// describing the same problem.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// describing the same problem — and so two failures can be told apart.
+///
+/// This is the identity of a failure group: every event whose rejection
+/// classifies the same way is the same problem, counted once.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum FailureClass {
     /// Wrong JSON type at `path`.
     WrongType { path: String },
@@ -800,19 +831,37 @@ enum FailureClass {
     /// send is a single failure explaining three issues.
     Undeclared { paths: Vec<String> },
     /// Anything else — a pattern, a format, a bound.
-    Other { path: String },
+    ///
+    /// `constraint` is the validator's own path to the check that failed, e.g.
+    /// `/properties/ssn/pattern`. The other variants are named by the keyword
+    /// they stand for; this one stands for whatever is left, so it has to say
+    /// which. Without it, a field with both a `pattern` and a `minLength` had
+    /// its two rejections counted as one.
+    Other { path: String, constraint: String },
 }
 
 impl FailureClass {
+    /// The kind of disagreement this is, for matching against drift.
+    fn tag(&self) -> &'static str {
+        match self {
+            Self::WrongType { .. } => "wrongType",
+            Self::OutsideEnum { .. } => "outsideEnum",
+            Self::MissingRequired { .. } => "missingRequired",
+            Self::Undeclared { .. } => "undeclared",
+            Self::Other { .. } => "other",
+        }
+    }
+
     /// The tag and paths this failure explains, for matching against drift.
     fn keys(&self) -> (&'static str, Vec<String>) {
-        match self {
-            Self::WrongType { path } => ("wrongType", vec![path.clone()]),
-            Self::OutsideEnum { path } => ("outsideEnum", vec![path.clone()]),
-            Self::MissingRequired { path } => ("missingRequired", vec![path.clone()]),
-            Self::Undeclared { paths } => ("undeclared", paths.clone()),
-            Self::Other { path } => ("other", vec![path.clone()]),
-        }
+        let paths = match self {
+            Self::WrongType { path }
+            | Self::OutsideEnum { path }
+            | Self::MissingRequired { path }
+            | Self::Other { path, .. } => vec![path.clone()],
+            Self::Undeclared { paths } => paths.clone(),
+        };
+        (self.tag(), paths)
     }
 
     /// Where to say this happened, for a failure nothing else explains.
@@ -821,8 +870,22 @@ impl FailureClass {
             Self::WrongType { path }
             | Self::OutsideEnum { path }
             | Self::MissingRequired { path }
-            | Self::Other { path } => path,
+            | Self::Other { path, .. } => path,
             Self::Undeclared { paths } => paths.first().map(String::as_str).unwrap_or_default(),
+        }
+    }
+
+    /// What names this failure apart from every other one at the same path.
+    ///
+    /// Goes in the issue key for a rejection no drift category explains. The
+    /// key used to carry the validator's message, which embeds the offending
+    /// value — so the same broken constraint was a different issue in every
+    /// sample, and re-grading a single event never produced the key the
+    /// sample had.
+    fn constraint(&self) -> &str {
+        match self {
+            Self::Other { constraint, .. } => constraint,
+            other => other.tag(),
         }
     }
 }
@@ -878,7 +941,10 @@ fn classify_failure(error: &jsonschema::ValidationError<'_>, pointer: &str) -> F
                 .map(|name| join_path(&path, name))
                 .collect(),
         },
-        _ => FailureClass::Other { path },
+        _ => FailureClass::Other {
+            path,
+            constraint: error.schema_path.to_string(),
+        },
     }
 }
 
@@ -1099,7 +1165,11 @@ fn build_issues(
             summary: format!(
                 "{} is required but absent from {} of events",
                 field_label(&field.path),
-                percent(absent, sampled),
+                // `affected`, not `absent`: where the validator has counted
+                // the rejections, that count is the one the row's own badge
+                // shows, and a summary reading 50% beside a badge reading
+                // 102/102 is a row arguing with itself.
+                percent(affected, sampled),
             ),
             action: format!(
                 "Make {} optional, or fix the producers that omit it.",
@@ -1234,7 +1304,7 @@ fn build_issues(
         }
         let path = class.path().to_string();
         issues.push(Issue {
-            key: format!("rejected:{}:{}", path, failure.message),
+            key: format!("rejected:{}:{}", path, class.constraint()),
             kind: IssueKind::Rejected,
             severity: severity_for(IssueKind::Rejected, true, None),
             path: path.clone(),
@@ -1618,6 +1688,182 @@ mod tests {
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].path, "a");
         assert_eq!(missing[0].seen_in, 1);
+    }
+
+    #[test]
+    fn a_required_field_nobody_sends_is_missing_rather_than_merely_quiet() {
+        // The worst case of a missing required field, which used to be filed
+        // as "never appeared in this sample" — a note, ranked below the same
+        // field missing from half the sample, and carrying a different issue
+        // key from the one the same field gets at 99%.
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "required": ["a"],
+                "properties": { "a": { "type": "string" }, "b": { "type": "string" } }
+            }}}
+        });
+        let events = vec![json!({ "b": "x" }), json!({ "b": "y" })];
+        let report = check_events(&doc, "T", &events).unwrap();
+        let issue = report
+            .issues
+            .iter()
+            .find(|i| i.key == "missingRequired:a")
+            .unwrap_or_else(|| panic!("{:?}", report.issues));
+        assert_eq!(issue.kind, IssueKind::MissingRequired);
+        assert_eq!(issue.severity, IssueSeverity::Error);
+        assert!(issue.rejects);
+        assert_eq!(issue.affected, 2);
+        assert!(issue.summary.contains("100%"), "{}", issue.summary);
+        assert!(!report.drift.unused.iter().any(|u| u.path == "a"));
+    }
+
+    #[test]
+    fn a_required_field_of_an_object_nobody_sends_blames_the_object() {
+        // `metadata` is optional and absent, so `metadata.trackingId` is not a
+        // field producers are omitting — there is nowhere to put it, and the
+        // bus does not reject these events over it.
+        let doc = json!({
+            "components": { "schemas": {
+                "T": {
+                    "type": "object",
+                    "properties": { "metadata": { "$ref": "#/components/schemas/M" } }
+                },
+                "M": {
+                    "type": "object",
+                    "required": ["trackingId"],
+                    "properties": { "trackingId": { "type": "string" } }
+                }
+            }}
+        });
+        let report = check_events(&doc, "T", &[json!({})]).unwrap();
+        assert!(
+            report.drift.missing_required.is_empty(),
+            "{:?}",
+            report.drift.missing_required
+        );
+        assert!(report
+            .drift
+            .unused
+            .iter()
+            .any(|u| u.path == "metadata.trackingId"));
+    }
+
+    #[test]
+    fn counts_each_missing_required_property_on_its_own() {
+        // The validator reports both at the pointer of the object that lacks
+        // them, under the same `required` keyword. Grouped by that alone, the
+        // two became one failure counting every event and naming one field:
+        // `a` was reported as rejecting 2 events out of 2 — beside its own
+        // summary saying 50% — and `b` as rejecting none.
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "required": ["a", "b"],
+                "properties": { "a": { "type": "string" }, "b": { "type": "string" } }
+            }}}
+        });
+        let events = vec![json!({ "b": "x" }), json!({ "a": "y" })];
+        let report = check_events(&doc, "T", &events).unwrap();
+        for (key, path) in [("missingRequired:a", "a"), ("missingRequired:b", "b")] {
+            let issue = report
+                .issues
+                .iter()
+                .find(|i| i.key == key)
+                .unwrap_or_else(|| panic!("{:?}", report.issues));
+            assert_eq!(issue.path, path);
+            assert_eq!(issue.affected, 1, "{}", issue.summary);
+            assert!(issue.rejects, "{}", issue.summary);
+            assert!(issue.summary.contains("50%"), "{}", issue.summary);
+        }
+    }
+
+    #[test]
+    fn two_constraints_broken_on_one_field_are_two_rejections() {
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "properties": { "a": { "type": "string", "minLength": 5, "pattern": "^[0-9]+$" } }
+            }}}
+        });
+        let report = check_events(&doc, "T", &[json!({ "a": "xy" })]).unwrap();
+        let rejections: Vec<&str> = report
+            .issues
+            .iter()
+            .filter(|i| i.kind == IssueKind::Rejected)
+            .map(|i| i.key.as_str())
+            .collect();
+        assert_eq!(rejections.len(), 2, "{rejections:?}");
+    }
+
+    #[test]
+    fn an_issue_keeps_its_key_when_one_event_is_graded_alone() {
+        // What the events drawer rests on. It re-grades each cached event by
+        // itself and keeps the ones whose report names the issue the panel was
+        // asked about, so a key that only exists at sample size 102 finds
+        // nothing and the drawer reads "no cached event shows this" about
+        // events that plainly do.
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "required": ["kept", "absent", "blank"],
+                "properties": {
+                    "kept": { "type": "string" },
+                    "absent": { "type": "string" },
+                    "blank": { "type": "string" },
+                    "count": { "type": "integer" },
+                    "status": { "type": "string", "enum": ["queued"] },
+                    "code": { "type": "string", "pattern": "^[0-9]+$" },
+                    "quiet": { "type": "string" }
+                }
+            }}}
+        });
+        let broken = json!({
+            "kept": "x",
+            "blank": "  ",
+            "count": 1.5,
+            "status": "retry",
+            "code": "abc",
+            "extra": true
+        });
+        let sample = vec![
+            json!({ "kept": "x", "absent": "y", "blank": "z" }),
+            broken.clone(),
+        ];
+
+        let whole = check_events(&doc, "T", &sample).unwrap();
+        let alone = check_events(&doc, "T", std::slice::from_ref(&broken)).unwrap();
+        let keys: BTreeSet<&str> = alone.issues.iter().map(|i| i.key.as_str()).collect();
+
+        for kind in [
+            IssueKind::MissingRequired,
+            IssueKind::EmptyRequired,
+            IssueKind::WrongType,
+            IssueKind::OutsideEnum,
+            IssueKind::Undeclared,
+            IssueKind::Rejected,
+        ] {
+            let issue = whole
+                .issues
+                .iter()
+                .find(|i| i.kind == kind)
+                .unwrap_or_else(|| panic!("{kind:?} not raised by the sample"));
+            assert!(
+                keys.contains(issue.key.as_str()),
+                "{:?} lost `{}` when graded alone: {keys:?}",
+                kind,
+                issue.key,
+            );
+        }
+
+        // And an event that does not show the issue is not offered as evidence
+        // of it: `absent` is required, present in the first event, and the
+        // drawer for it must not list that event.
+        let clean = check_events(&doc, "T", &sample[..1]).unwrap();
+        assert!(!clean
+            .issues
+            .iter()
+            .any(|i| i.key == "missingRequired:absent"));
     }
 
     #[test]

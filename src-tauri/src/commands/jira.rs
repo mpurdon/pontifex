@@ -251,6 +251,75 @@ pub async fn jira_issue_types(
     issues::issue_types(&client(&state).await?, &project_key).await
 }
 
+/// Which findings to ask about, alongside the event type itself.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventTicketsRequest {
+    pub context: TicketContext,
+    /// Dotted paths of the findings on screen, so each ticket can say which
+    /// of them it covers. Empty asks only what exists for the event type.
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+/// Every ticket filed about this event type, with where each one stands.
+///
+/// The labels a ticket carries are what make this one search rather than a
+/// record Pontifex would have to keep and keep correct: they name the bus,
+/// the producer and the event type, so Jira itself is the list.
+#[tauri::command]
+pub async fn jira_event_tickets(
+    state: State<'_, AppState>,
+    request: EventTicketsRequest,
+) -> Result<Vec<issues::EventTicket>> {
+    let labels = ticket::event_labels(&request.context);
+    issues::tickets_for_event(&client(&state).await?, &labels, &request.paths, 50).await
+}
+
+/// Every Pontifex ticket in an environment, grouped by the schema it is about.
+///
+/// One search for the whole report rather than one per row: forty schemas
+/// would be forty round trips for an answer Jira gives in a single query,
+/// because the labels name the bus and the event type alike.
+#[tauri::command]
+pub async fn jira_tickets_by_schema(
+    state: State<'_, AppState>,
+    schema_names: Vec<String>,
+    env_id: Option<String>,
+) -> Result<std::collections::BTreeMap<String, Vec<issues::EventTicket>>> {
+    let env = state.resolve_environment(env_id.as_deref()).await?;
+    let client = client(&state).await?;
+    let tickets = issues::tickets_for_event(
+        &client,
+        &[
+            ticket::TICKET_LABEL.to_string(),
+            ticket::bus_label(&env.label),
+        ],
+        &[],
+        200,
+    )
+    .await?;
+
+    let mut by_schema: std::collections::BTreeMap<String, Vec<issues::EventTicket>> =
+        Default::default();
+    for name in schema_names {
+        let Ok(identity) = crate::schema::model::EventIdentity::from_schema_name(&name) else {
+            continue;
+        };
+        let source = ticket::label(&identity.source);
+        let detail_type = ticket::label(&identity.detail_type);
+        let about: Vec<_> = tickets
+            .iter()
+            .filter(|t| t.labels.contains(&source) && t.labels.contains(&detail_type))
+            .cloned()
+            .collect();
+        if !about.is_empty() {
+            by_schema.insert(name, about);
+        }
+    }
+    Ok(by_schema)
+}
+
 /// What a project demands before it will accept a ticket.
 ///
 /// Asked of Jira rather than assumed: a project can make any field mandatory,
@@ -305,12 +374,27 @@ fn merge_fields(
     }
 }
 
-/// One issue plus where it was found: everything a ticket needs.
+/// The findings a ticket is about, plus where they were found.
+///
+/// A list rather than one issue: a row's File button sends the one it sits on,
+/// and the Analysis tab's roll-up sends every finding it has, which becomes a
+/// single ticket instead of eight arriving together in the same backlog.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TicketRequest {
-    pub issue: Issue,
+    pub issues: Vec<Issue>,
     pub context: TicketContext,
+}
+
+impl TicketRequest {
+    /// The finding a result is reported against. A roll-up reports against the
+    /// worst of them, which is the one the list is ranked by.
+    fn lead_key(&self) -> String {
+        self.issues
+            .first()
+            .map(|issue| issue.key.clone())
+            .unwrap_or_default()
+    }
 }
 
 /// A rendered ticket, and whether one already exists for it.
@@ -321,6 +405,14 @@ pub struct TicketPreview {
     pub draft: TicketDraft,
     /// An open ticket already filed for this exact problem.
     pub existing: Option<FiledTicket>,
+    /// Why the duplicate check could not run, when it could not.
+    ///
+    /// Reported rather than swallowed. The check is best-effort — a preview
+    /// has to render when Jira is unreachable — but "no duplicate found" and
+    /// "could not look" are different facts, and quietly treating the second
+    /// as the first is how a removed search endpoint went unnoticed for
+    /// months while every ticket was filed as if nothing existed.
+    pub duplicate_check: Option<Error>,
 }
 
 /// Fill in who publishes the event, from the origin cache, when a lookup
@@ -347,18 +439,23 @@ pub async fn preview_jira_ticket(
     let mut request = request;
     let org = crate::commands::origin::resolve_org(&settings).await;
     fill_origin(&state, org.as_deref(), &mut request.context).await;
-    let draft = ticket::draft(&request.issue, &request.context, &settings.jira)?;
+    let draft = ticket::draft(&request.issues, &request.context, &settings.jira)?;
 
     // Best-effort: a preview must still render when Jira is unreachable, or a
     // network blip would block filing rather than just the duplicate check.
-    let existing = match client(&state).await {
-        Ok(client) => issues::find_open_by_fingerprint(&client, &draft.fingerprint)
-            .await
-            .unwrap_or(None),
-        Err(_) => None,
+    let (existing, duplicate_check) = match client(&state).await {
+        Ok(client) => match issues::find_open_duplicate(&client, &draft).await {
+            Ok(found) => (found, None),
+            Err(e) => (None, Some(e)),
+        },
+        Err(e) => (None, Some(e)),
     };
 
-    Ok(TicketPreview { draft, existing })
+    Ok(TicketPreview {
+        draft,
+        existing,
+        duplicate_check,
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -412,7 +509,7 @@ async fn file_one(
     request: &FileTicketRequest,
 ) -> Result<(FileOutcome, FiledTicket)> {
     let mut draft = ticket::draft(
-        &request.ticket.issue,
+        &request.ticket.issues,
         &request.ticket.context,
         &settings.jira,
     )?;
@@ -463,11 +560,7 @@ async fn file_one(
         issues::comment(
             client,
             key,
-            &issues::recurrence_comment(
-                request.ticket.issue.affected,
-                request.ticket.issue.sampled,
-                &window,
-            ),
+            &issues::recurrence_comment(&request.ticket.issues, &window),
         )
         .await?;
         return Ok((
@@ -492,7 +585,7 @@ pub async fn file_jira_ticket(
 ) -> Result<FileTicketResult> {
     let client = client(&state).await?;
     let settings = state.settings_snapshot().await;
-    let issue_key = request.ticket.issue.key.clone();
+    let issue_key = request.ticket.lead_key();
     let schema_name = request.ticket.context.schema_name.clone();
 
     // A single filing surfaces its failure as an error, so the dialog can show
@@ -532,25 +625,24 @@ pub async fn file_jira_tickets(
     // twenty-schema run spent most of its wall clock waiting for them one at a
     // time. The writes stay sequential — creating twenty tickets in parallel
     // is not a courtesy to anyone's Jira.
-    let fingerprints: Vec<Option<String>> = requests
+    let drafts: Vec<Option<TicketDraft>> = requests
         .iter()
         .map(|request| {
             ticket::draft(
-                &request.ticket.issue,
+                &request.ticket.issues,
                 &request.ticket.context,
                 &settings.jira,
             )
             .ok()
-            .map(|draft| draft.fingerprint)
         })
         .collect();
 
-    let mut existing: Vec<Option<FiledTicket>> = Vec::with_capacity(fingerprints.len());
-    for batch in fingerprints.chunks(DEDUPE_CONCURRENCY) {
+    let mut existing: Vec<Option<FiledTicket>> = Vec::with_capacity(drafts.len());
+    for batch in drafts.chunks(DEDUPE_CONCURRENCY) {
         existing.extend(
-            futures::future::join_all(batch.iter().map(|fingerprint| async {
-                match fingerprint {
-                    Some(fingerprint) => issues::find_open_by_fingerprint(&client, fingerprint)
+            futures::future::join_all(batch.iter().map(|draft| async {
+                match draft {
+                    Some(draft) => issues::find_open_duplicate(&client, draft)
                         .await
                         .unwrap_or(None),
                     None => None,
@@ -563,7 +655,7 @@ pub async fn file_jira_tickets(
     let mut results = Vec::with_capacity(requests.len());
 
     for (request, already) in requests.iter().zip(existing) {
-        let issue_key = request.ticket.issue.key.clone();
+        let issue_key = request.ticket.lead_key();
         let schema_name = request.ticket.context.schema_name.clone();
 
         if already.is_some() && request.comment_on.is_none() {

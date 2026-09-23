@@ -297,6 +297,7 @@ pub fn run() {
             // reality check
             commands::reality::check_against_events,
             commands::reality::cached_analysis,
+            commands::reality::events_for_issue,
             commands::reality::apply_field_suggestions,
             commands::reality::add_observed_field,
             commands::reality::apply_issue_repair,
@@ -320,6 +321,8 @@ pub fn run() {
             commands::jira::jira_projects,
             commands::jira::jira_issue_types,
             commands::jira::jira_required_fields,
+            commands::jira::jira_event_tickets,
+            commands::jira::jira_tickets_by_schema,
             commands::jira::set_jira_field_defaults,
             commands::jira::preview_jira_ticket,
             commands::jira::file_jira_ticket,

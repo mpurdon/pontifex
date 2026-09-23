@@ -142,7 +142,7 @@ export function SchemaList({
   }, [selected, schemas])
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <div className="relative shrink-0 border-b border-edge p-2">
         <Search className="pointer-events-none absolute left-4 top-1/2 size-3 -translate-y-1/2 text-ink-faint" />
         <Input

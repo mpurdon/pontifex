@@ -736,6 +736,25 @@ export interface RegistryReportRequest {
   maxSeconds?: number
 }
 
+/** Which cached events exhibit one issue from an analysis. */
+export interface IssueExamplesRequest {
+  name: string
+  /** The document the analysis ran against. */
+  content: unknown
+  typeName?: string
+  /** The issue's stable key, e.g. `emptyRequired:client.dob`. */
+  issueKey: string
+  minutes?: number
+  limit?: number
+}
+
+export interface IssueExample {
+  id: string
+  /** Epoch ms. */
+  timestamp: number
+  detail: unknown
+}
+
 export interface RealityCheckRequest {
   name: string
   content: unknown
@@ -791,8 +810,8 @@ export interface LogQuery {
   source?: string
   detailType?: string
   filterPattern?: string
+  /** The most events to return; the newest matches win. */
   limit?: number
-  nextToken?: string
 }
 
 export interface LogEvent {
@@ -807,9 +826,15 @@ export interface LogEvent {
 }
 
 export interface LogPage {
+  /** Newest first. */
   events: LogEvent[]
-  nextToken: string | null
   filterPattern: string | null
+  /** How far back the scan got, epoch ms; nothing before it was searched. */
+  searchedFrom: number
+  /** True when the whole window was searched. */
+  complete: boolean
+  /** Why the scan stopped short, when it did. */
+  scanNote: string | null
 }
 
 // --- topology -------------------------------------------------------------
@@ -935,8 +960,13 @@ export interface TicketDraft {
   labels: string[]
   /** Values for fields the target project makes mandatory. */
   fields: Record<string, unknown>
-  /** Identifies this exact problem across runs, as a label. */
+  /**
+   * Identifies this exact problem across runs. Kept only to find tickets
+   * filed before the labels were readable; nothing is filed with it now.
+   */
   fingerprint: string
+  /** The labels that say what the ticket is about, and identify it for dedupe. */
+  identity: string[]
   assigneeAccountId: string | null
   /** Why this project — so routing is auditable. */
   routedBy: string
@@ -945,6 +975,11 @@ export interface TicketDraft {
 export interface TicketPreview extends TicketDraft {
   /** An open ticket already filed for this exact problem. */
   existing: FiledTicket | null
+  /**
+   * Why the duplicate check could not run, when it could not — "none found"
+   * and "could not look" are different facts.
+   */
+  duplicateCheck: IpcError | null
 }
 
 export type FileOutcome = 'created' | 'commented' | 'skipped' | 'failed'
@@ -958,7 +993,11 @@ export interface FileTicketResult {
 }
 
 export interface FileTicketRequest {
-  issue: Issue
+  /**
+   * Everything the ticket is about. One for a row's own File button; every
+   * finding for the roll-up the Analysis tab files.
+   */
+  issues: Issue[]
   context: TicketContext
   /** Edits made in the preview. */
   summary?: string
@@ -969,6 +1008,24 @@ export interface FileTicketRequest {
   fields?: Record<string, unknown>
   /** Comment on this existing ticket instead of creating a second one. */
   commentOn?: string
+}
+
+/** A ticket already filed about an event type, with where it stands. */
+export interface EventTicket {
+  key: string
+  url: string
+  summary: string
+  /** The project's own word for it — "In Progress", "Blocked", "Done". */
+  status: string
+  /** Jira's grouping of that word, which is what to colour by. */
+  done: boolean
+  started: boolean
+  /** Findings this ticket covers, by the dotted path each was reported at. */
+  covers: string[]
+  /** Every label on it, for telling which event type a ticket belongs to. */
+  labels: string[]
+  /** Epoch ms of the last change. */
+  updated: number | null
 }
 
 /** Issues re-derived for one schema, for filing several at once. */
