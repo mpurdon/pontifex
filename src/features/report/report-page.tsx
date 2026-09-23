@@ -198,20 +198,6 @@ export function ReportPage() {
     retry: false,
   })
 
-  /**
-   * What has been filed about the schemas in this report, and where each one
-   * stands — one search for the whole table, because the labels on a ticket
-   * name the bus and the event type alike.
-   */
-  const names = useMemo(() => (report?.rows ?? []).map((row) => row.name), [report])
-  const tickets = useQuery({
-    queryKey: ['jira', 'ticketsBySchema', envId, names.join('|')],
-    queryFn: () => ipc.jiraTicketsBySchema(names, envId),
-    enabled: !!jira.data?.connected && names.length > 0,
-    staleTime: 60_000,
-    retry: false,
-  })
-
   // Age of the report relative to the window it claims to cover.
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -304,6 +290,24 @@ export function ReportPage() {
     // Missing first; the backend already ordered the rest worst-first.
     return [...undocumented, ...graded]
   }, [report, registered, healthDone])
+
+  /**
+   * What has been filed about the event types in this report, and where each
+   * one stands — one search for the whole table, because the labels on a
+   * ticket name the bus and the event type alike.
+   *
+   * Every row, not only the graded ones: an event type with no schema at all
+   * is among the most likely to have been filed, and looking it up only for
+   * the rows that have a schema left that column blank on exactly those.
+   */
+  const names = useMemo(() => rows.map((row) => row.name), [rows])
+  const tickets = useQuery({
+    queryKey: ['jira', 'ticketsBySchema', envId, names.join('|')],
+    queryFn: () => ipc.jiraTicketsBySchema(names, envId),
+    enabled: !!jira.data?.connected && names.length > 0,
+    staleTime: 60_000,
+    retry: false,
+  })
 
   /** Rows dealt with since the report, per status, for the bar and the chip. */
   const doneCounts = useMemo(() => {
@@ -876,11 +880,6 @@ const Row = memo(function Row({
         )}
       </td>
 
-      {/* Stops the click reaching the row: this one goes to Jira. */}
-      <td className="whitespace-nowrap px-2" onClick={(e) => e.stopPropagation()}>
-        <FiledCell tickets={tickets} />
-      </td>
-
       {/* One line, always: the counts are abbreviated and never wrap, because
           a wrapping cell used to set the height of every row in the table. */}
       <td className="whitespace-nowrap px-2 text-ink-faint">
@@ -915,6 +914,12 @@ const Row = memo(function Row({
             )}
           </span>
         )}
+      </td>
+
+      {/* Stops the click reaching the row, which opens the schema: this cell
+          goes to Jira instead. */}
+      <td className="whitespace-nowrap px-2" onClick={(e) => e.stopPropagation()}>
+        <FiledCell tickets={tickets} />
       </td>
 
       <td className="w-full max-w-0 px-2 text-ink-faint">
