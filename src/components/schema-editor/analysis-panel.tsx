@@ -409,8 +409,9 @@ export function AnalysisPanel({
    * what happened to it afterwards. The labels on a ticket name the bus, the
    * producer and the event type, so the search is the record.
    */
+  const ticketsKey = ['jira', 'eventTickets', envId, schemaName, paths.join('|')]
   const tickets = useQuery({
-    queryKey: ['jira', 'eventTickets', envId, schemaName, paths.join('|')],
+    queryKey: ticketsKey,
     queryFn: () => ipc.jiraEventTickets(ticketContext!, paths),
     enabled: !!ticketContext && !!jira.data?.connected,
     staleTime: 60_000,
@@ -728,10 +729,33 @@ export function AnalysisPanel({
             // the problem now belongs to whoever owns the producer, and
             // leaving it in the working list means meeting it again on every
             // pass down the same list. A roll-up settles every row it covered.
-            // Ask Jira again, so the ticket joins the strip above with a real
-            // status. It may not be in the search index for a few seconds yet;
-            // the chip on the row is what covers that gap.
-            queryClient.invalidateQueries({ queryKey: ['jira', 'eventTickets'] })
+            // Jira's search index runs behind its own writes: asking for a
+            // ticket a moment after creating it returns nothing, and caching
+            // that answer hides it for a minute — which is what happened
+            // when this invalidated the query immediately. Put the ticket in
+            // the cache directly, and ask again once indexing has caught up.
+            queryClient.setQueryData<EventTicket[]>(ticketsKey, (held = []) => [
+              {
+                key: ticket.key,
+                url: ticket.url,
+                summary: ticket.summary ?? '',
+                // Its real status arrives with the refetch; until then say
+                // what is certainly true rather than guessing at a workflow.
+                status: 'filed',
+                done: false,
+                started: false,
+                covers: issueKeys
+                  .map((key) => result?.issues.find((i) => i.key === key)?.path ?? '')
+                  .filter(Boolean),
+                labels: [],
+                updated: Date.now(),
+              },
+              ...held.filter((t) => t.key !== ticket.key),
+            ])
+            window.setTimeout(
+              () => queryClient.invalidateQueries({ queryKey: ['jira', 'eventTickets'] }),
+              20_000,
+            )
             setResolved((prev) => ({
               ...prev,
               ...Object.fromEntries(

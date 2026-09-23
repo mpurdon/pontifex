@@ -10,6 +10,7 @@ import type {
   RequiredField,
   TicketContext,
 } from '@/lib/types'
+import { IssueTypePicker, ProjectPicker } from './project-picker'
 import { WikiPreview } from './wiki-preview'
 import { formatAge } from '@/lib/format'
 import {
@@ -100,6 +101,7 @@ export function FileTicketDialog({
   /** Answers for whatever this project makes mandatory, keyed by field id. */
   const [fields, setFields] = useState<Record<string, unknown>>({})
   const [remember, setRemember] = useState(true)
+  const [issueType, setIssueType] = useState('')
   const [bodyTab, setBodyTab] = useState<'write' | 'preview'>('write')
 
   const keys = findings.map((finding) => finding.key)
@@ -119,6 +121,7 @@ export function FileTicketDialog({
     setDescription(preview.data.description)
     setProjectKey(preview.data.projectKey)
     setCommittedProject(preview.data.projectKey)
+    setIssueType(preview.data.issueType)
     // Whatever was answered for this project last time.
     setFields(preview.data.fields ?? {})
   }, [preview.data])
@@ -133,10 +136,45 @@ export function FileTicketDialog({
   // Keyed on the committed project, not on every keystroke: the field is free
   // text, and each lookup is two Jira round trips — typing `IPP` fired six.
   const [committedProject, setCommittedProject] = useState('')
+
+  /**
+   * Every project the signed-in account can see, so the routed one can be
+   * overruled from here. Shared cache with Settings, which asks the same
+   * question.
+   */
+  const projects = useQuery({
+    queryKey: ['jira', 'projects'],
+    queryFn: ipc.jiraProjects,
+    enabled: open,
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
+
+  /**
+   * Switching project drops the answers given for the old one: a mandatory
+   * field is a property of the project, and carrying "Discovery Environment:
+   * Production" into a project that has never heard of it is a create call
+   * rejected over a field the user did not choose. The new project's own
+   * defaults are filled in by the backend at file time.
+   */
+  /** The types the chosen project offers, so Type is a list and not a guess. */
+  const issueTypes = useQuery({
+    queryKey: ['jira', 'issueTypes', committedProject],
+    queryFn: () => ipc.jiraIssueTypes(committedProject),
+    enabled: open && !!committedProject,
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
+
+  const chooseProject = (key: string) => {
+    setProjectKey(key)
+    setCommittedProject(key.trim())
+    if (key.trim() !== committedProject) setFields({})
+  }
   const required = useQuery({
-    queryKey: ['jira', 'requiredFields', committedProject, preview.data?.issueType],
-    queryFn: () => ipc.jiraRequiredFields(committedProject, preview.data!.issueType),
-    enabled: open && !!committedProject && !!preview.data?.issueType,
+    queryKey: ['jira', 'requiredFields', committedProject, issueType],
+    queryFn: () => ipc.jiraRequiredFields(committedProject, issueType),
+    enabled: open && !!committedProject && !!issueType,
     retry: false,
     staleTime: 5 * 60_000,
   })
@@ -162,7 +200,7 @@ export function FileTicketDialog({
         summary,
         description,
         projectKey,
-        issueType: preview.data?.issueType,
+        issueType,
         fields,
         commentOn,
       })
@@ -190,7 +228,16 @@ export function FileTicketDialog({
   const existing = preview.data?.existing
 
   return (
-    <Modal open={open} onClose={onClose} width={640} className="flex max-h-[85vh] flex-col p-4">
+    // Wider than the other dialogs: this one holds a rendered ticket body, and
+    // at 640 the evidence lines wrapped every few words. Capped as a share of
+    // the window too, so it stays a dialog on a laptop screen rather than
+    // running under both edges.
+    <Modal
+      open={open}
+      onClose={onClose}
+      width={1000}
+      className="flex max-h-[85vh] max-w-[92vw] flex-col p-4"
+    >
       <ModalTitle>
         <Bug className="size-4" />
         {findings.length > 1
@@ -211,7 +258,11 @@ export function FileTicketDialog({
       )}
 
       {preview.data && (
-        <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
+        // `pr-3`: the scrollbar sits at this container's right edge, and
+        // without it every field runs flush into the scrollbar and then the
+        // modal border, which reads as content escaping the dialog rather
+        // than sitting inside it.
+        <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3 overflow-auto pr-3">
           {/* Saying so rather than filing blind: without the check, an open
               ticket for this exact problem would not be offered as somewhere
               to comment, and this would quietly become the second one. */}
@@ -249,16 +300,38 @@ export function FileTicketDialog({
           </Field>
 
           <div className="grid grid-cols-[1fr_auto] gap-2">
-            <Field label="Project" hint="from the routing rules">
-              <Input
+            <Field
+              label="Project"
+              className="min-w-0"
+              hint={
+                projectKey === preview.data.projectKey
+                  ? 'from the routing rules — change it for this ticket only'
+                  : `routed to ${preview.data.projectKey || '—'}; filing here instead`
+              }
+            >
+              {/* The routing rules make a suggestion, not a decision: the team
+                  that owns the source is not always the team that will do the
+                  work, and finding that out at the preview should not mean a
+                  trip to Settings. Changing it here is for this ticket only —
+                  the rule is what the next one follows. */}
+              <ProjectPicker
                 value={projectKey}
-                onChange={(e) => setProjectKey(e.target.value)}
-                onBlur={(e) => setCommittedProject(e.target.value.trim())}
-                className="font-mono"
+                projects={projects.data}
+                emptyLabel="choose a project…"
+                onChange={chooseProject}
               />
             </Field>
-            <Field label="Type">
-              <Input value={preview.data.issueType} readOnly className="font-mono" />
+            {/* Not read-only any more: the routed type is only right for the
+                routed project, and choosing another is the fastest way to a
+                create rejected for an issue type the project has never
+                offered. The list is what that project actually offers. */}
+            <Field label="Type" className="w-44 min-w-0">
+              <IssueTypePicker
+                value={issueType}
+                types={issueTypes.data}
+                fallbackLabel={preview.data.issueType}
+                onChange={setIssueType}
+              />
             </Field>
           </div>
 

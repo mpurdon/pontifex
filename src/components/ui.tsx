@@ -1,9 +1,19 @@
 import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 import * as Dialog from '@radix-ui/react-dialog'
+import * as SelectMenuPrimitive from '@radix-ui/react-select'
 import type { ReactNode } from 'react'
 import { useState } from 'react'
-import { AlertTriangle, Check, CheckCircle2, Copy, Info, Loader2, XCircle } from 'lucide-react'
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  ChevronsUpDown,
+  Copy,
+  Info,
+  Loader2,
+  XCircle,
+} from 'lucide-react'
 import type { Finding, IpcError, Severity } from '@/lib/types'
 
 export function cn(...inputs: ClassValue[]) {
@@ -88,6 +98,90 @@ export function Textarea({
         className,
       )}
     />
+  )
+}
+
+/**
+ * A list long enough to deserve the app's own styling.
+ *
+ * The native `<select>` below is right for three options — it is one element,
+ * it behaves the way the platform does, and nobody wants a hand-rolled
+ * dropdown for "= or ≠". It is wrong for forty Jira projects: macOS draws its
+ * own menu in its own colours, as tall as the list, over everything.
+ *
+ * This one is the app's colours, ten rows tall, and scrolls past that.
+ */
+export function SelectMenu({
+  value,
+  onChange,
+  options,
+  placeholder,
+  className,
+  disabled,
+}: {
+  value: string
+  onChange: (value: string) => void
+  options: readonly { value: string; label: string }[]
+  placeholder?: string
+  className?: string
+  disabled?: boolean
+}) {
+  return (
+    <SelectMenuPrimitive.Root
+      // Radix refuses an empty string as a value, so "nothing chosen" is the
+      // absence of one — which is also what shows the placeholder.
+      value={value || undefined}
+      onValueChange={onChange}
+      disabled={disabled}
+    >
+      <SelectMenuPrimitive.Trigger
+        className={cn(
+          'flex h-7 w-full items-center gap-1 rounded-md border border-edge bg-surface-1 px-2 text-xs text-ink',
+          'focus:border-accent focus:outline-none disabled:text-ink-faint',
+          className,
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate text-left">
+          <SelectMenuPrimitive.Value placeholder={placeholder} />
+        </span>
+        <SelectMenuPrimitive.Icon>
+          <ChevronsUpDown className="size-3 shrink-0 text-ink-faint" />
+        </SelectMenuPrimitive.Icon>
+      </SelectMenuPrimitive.Trigger>
+
+      <SelectMenuPrimitive.Portal>
+        <SelectMenuPrimitive.Content
+          // Anchored to the trigger rather than covering it, and never wider
+          // than it needs to be — a project list is read left to right.
+          position="popper"
+          sideOffset={4}
+          // Not `panel`: that is the plate style, and it carries a margin —
+          // which on something anchored to a trigger is an offset.
+          className="z-50 overflow-hidden rounded-md border border-edge bg-surface-1 shadow-2xl"
+        >
+          {/* Ten rows, then a scrollbar. `min-w` keeps a short list from
+              drawing a menu narrower than the control it came from. */}
+          <SelectMenuPrimitive.Viewport className="max-h-[15rem] min-w-[var(--radix-select-trigger-width)] overflow-y-auto p-1">
+            {options.map((option) => (
+              <SelectMenuPrimitive.Item
+                key={option.value}
+                value={option.value}
+                className={cn(
+                  'flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-xs text-ink-muted outline-none',
+                  'data-[highlighted]:bg-surface-3 data-[highlighted]:text-ink',
+                  'data-[state=checked]:text-accent',
+                )}
+              >
+                <SelectMenuPrimitive.ItemIndicator className="shrink-0">
+                  <Check className="size-3" />
+                </SelectMenuPrimitive.ItemIndicator>
+                <SelectMenuPrimitive.ItemText>{option.label}</SelectMenuPrimitive.ItemText>
+              </SelectMenuPrimitive.Item>
+            ))}
+          </SelectMenuPrimitive.Viewport>
+        </SelectMenuPrimitive.Content>
+      </SelectMenuPrimitive.Portal>
+    </SelectMenuPrimitive.Root>
   )
 }
 

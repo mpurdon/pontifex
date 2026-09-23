@@ -34,6 +34,7 @@ import {
   cn,
 } from '@/components/ui'
 import { useSettings } from '@/app/settings-context'
+import { IssueTypePicker, ProjectPicker } from './project-picker'
 
 /**
  * Wildcard families worth offering, derived from the sources that exist.
@@ -56,94 +57,6 @@ export function suggestPatterns(sources: string[]): string[] {
     .map(([head]) => `${head}-*`)
     .sort()
   return [...wildcards, ...sources]
-}
-
-/**
- * A project chosen from Jira, or typed when Jira cannot be reached.
- *
- * Both the per-rule and the default-project fields need the same three
- * behaviours: pick from the real list, keep showing a key that is set but not
- * visible, and degrade to free text when the list could not be read.
- */
-function ProjectPicker({
-  value,
-  projects,
-  emptyLabel,
-  onChange,
-}: {
-  value: string
-  /** Undefined until Jira answers — or forever, if it cannot. */
-  projects: JiraProject[] | undefined
-  emptyLabel: string
-  onChange: (key: string) => void
-}) {
-  if (!projects) {
-    return (
-      <Input
-        value={value}
-        onChange={(e) => onChange(e.target.value.toUpperCase())}
-        placeholder="IPP"
-        className="font-mono"
-        spellCheck={false}
-      />
-    )
-  }
-
-  return (
-    <Select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="w-full font-mono"
-    >
-      <option value="">{emptyLabel}</option>
-      {/* A key set before the list loaded, or from a project you can no longer
-          see, still shows rather than silently vanishing from the form. */}
-      {value && !projects.some((p) => p.key === value) && (
-        <option value={value}>{value} — not visible to you</option>
-      )}
-      {projects.map((project) => (
-        <option key={project.key} value={project.key}>
-          {project.key} — {project.name}
-        </option>
-      ))}
-    </Select>
-  )
-}
-
-/** An issue type this project offers, or free text until it says. */
-function IssueTypePicker({
-  value,
-  types,
-  fallbackLabel,
-  onChange,
-}: {
-  value: string
-  types: string[] | undefined
-  /** Shown for the empty choice, or for a value the project does not offer. */
-  fallbackLabel: string
-  onChange: (type: string) => void
-}) {
-  if (!types) {
-    return (
-      <Input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={fallbackLabel}
-        spellCheck={false}
-      />
-    )
-  }
-
-  return (
-    <Select value={value} onChange={(e) => onChange(e.target.value)} className="w-full">
-      {!types.includes(value) && <option value={value}>{value || fallbackLabel}</option>}
-      {types.map((type) => (
-        <option key={type} value={type}>
-          {type}
-        </option>
-      ))}
-    </Select>
-  )
 }
 
 /** One column layout for the header and every rule row, so they cannot drift. */
