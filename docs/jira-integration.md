@@ -16,13 +16,19 @@ fix it without retyping any of it.
 | Auth | OAuth 2.0 (3LO) in the system browser; the work IdP handles SSO |
 | Team model | One Jira project per pod — routing maps an event `source` to a project key, or the owning team or repository when no source rule says |
 | Entry points | Per issue in the Analysis panel; bulk from the Health report, including types with no schema; per hit in Watch |
-| REST version | v2, not v3 |
+| REST version | v2, not v3 — except search, which only exists on v3 |
 
 ### Why v2
 
 v2 takes a plain-string `description` (wiki markup, `{code}` blocks). v3
 requires assembling Atlassian Document Format JSON for the same output. v2 is
 current for Cloud and is what Atlassian's own OAuth examples use.
+
+The exception is JQL search. Atlassian removed `GET /rest/api/{2,3}/search`
+during 2025 — it answers 410 Gone — and the replacement lives at
+`/rest/api/3/search/jql`, so that one call goes to v3. Nothing read back
+differs between the versions: `summary`, `status`, `labels` and `updated` are
+the same shape in both, and it is `description` that v3 returns as a document.
 
 ### The client secret
 
@@ -82,10 +88,15 @@ Scopes: `read:jira-work write:jira-work read:jira-user offline_access`.
    type, labels, optional assignee), with a fallback project. Validated against
    `/project` and per-project `createmeta`, so a wrong key or a missing issue
    type is caught in Settings rather than at 403 time.
-4. **Dedupe.** Every ticket carries a `pontifex-<fingerprint>` label derived from
-   schema + environment + `issue.key`. Before creating, search for an open
-   ticket with that label and offer to comment instead. This is what stops
-   phase 5 being a spam cannon.
+4. **Dedupe.** Every ticket carries the labels that say what it is about:
+   `pontifex`, the bus (stage included), the source, the detail type, and one
+   per field. Before creating, search for an open ticket carrying all of them
+   and offer to comment instead. This is what stops phase 5 being a spam
+   cannon. They replaced a `pontifex-<fingerprint>` hash derived from schema +
+   environment + `issue.key`: no reader could check it, it put six opaque
+   strings into a site-wide label picker, and because the rejection message it
+   hashed carried a sampled value, the same broken constraint fingerprinted
+   differently in every sample.
 5. **Bulk.** Select failing schemas in the Health report, group by source,
    preview exactly what will be created and what was skipped as already filed,
    then create in one batch with per-row results.
@@ -160,6 +171,36 @@ answers the question and unblocks the rest.
 - The secret and tokens live in the OS keychain, never in `settings.json`.
 - A 403 from a target project reads as "you cannot create issues in PROJ", not
   as a bare status code.
+
+## Next
+
+Effort is in working days for one person who knows the codebase, the same
+scale `watch-roadmap.md` uses.
+
+### Filing from the Health report should roll up per event type — 1 day
+
+The Analysis tab files every finding on an event type as one ticket. The
+Health report still files one ticket per finding, so selecting five schemas
+with six findings each creates thirty tickets in other people's backlogs —
+the thing phase 4 exists to prevent, arriving by a different door.
+
+The pieces are already there: `TicketRequest` takes a list of findings, and
+`ticket::draft` renders one or many. What changes is the bulk dialog, which
+currently sends one request per issue (`issues: [row.issue]`) and lists one
+candidate row per issue. It should group its candidates by event type, send
+each group as one request, and preview "6 findings → one ticket" rather than
+six lines.
+
+Two things to decide while doing it:
+
+- **What the selection means.** The report selects schemas, but the dialog
+  lists issues. Once a schema is one ticket those are the same thing, and the
+  per-issue checkboxes can go.
+- **What the button offers when a ticket is already open.** The Filed column
+  now knows: a row with an open ticket has somewhere to comment rather than a
+  second ticket to create, and the bulk run already reports those as skipped.
+  Whether the row should still be selectable is a judgement about how often a
+  new finding arrives on an event type that is already filed.
 
 ## Risks
 
