@@ -1081,13 +1081,16 @@ function IssueRow({
           </p>
         )}
 
-        {/* What to do and the buttons that do it, on one line: the sentence
-            explains the button beside it. */}
-        <div className="mt-1 flex items-start gap-2">
-          <p className="min-w-0 flex-1 text-[10px] leading-snug text-ink-faint">
+        {/* What to do and the buttons that do it, on one line while they fit:
+            the sentence explains the button beside it. The sentence keeps a
+            floor and the buttons drop below it rather than crushing it —
+            "Fix the producer, or redeclare this field as number." set five
+            words wide is not a sentence anyone reads. */}
+        <div className="mt-1 flex flex-wrap items-start gap-x-2 gap-y-1">
+          <p className="min-w-[12rem] flex-1 text-[10px] leading-snug text-ink-faint">
             <Marked text={action} />
           </p>
-          <div className="shrink-0">{actions}</div>
+          <div className="ml-auto shrink-0">{actions}</div>
         </div>
 
         {/* A model's proposal, shown with its reasoning and not applied until
