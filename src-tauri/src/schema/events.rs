@@ -288,7 +288,7 @@ fn type_name_of(value: &Value) -> &'static str {
 /// Enough to describe an enum-shaped field ("saw `pending`, `queued`, `done`")
 /// without accumulating a set the size of the sample for a field that holds an
 /// id.
-const VALUE_SAMPLE_CAP: usize = 32;
+pub const VALUE_SAMPLE_CAP: usize = 32;
 
 /// What one event said about one path.
 #[derive(Debug, Default, Clone)]
@@ -374,6 +374,15 @@ struct Observation {
 }
 
 impl Observation {
+    /// The distinct values seen here, in first-seen order. Already
+    /// deduplicated and capped by [`Observation::absorb`].
+    fn values(&self) -> Vec<Value> {
+        self.value_counts
+            .iter()
+            .map(|(value, _)| value.clone())
+            .collect()
+    }
+
     fn types(&self) -> Vec<String> {
         self.type_counts.keys().cloned().collect()
     }
@@ -540,6 +549,64 @@ fn declare_object(
                 declare_object(document, item_schema, &item_path, stack, out);
             }
         }
+    }
+}
+
+/// Every string at one dotted path, uncapped and in order — `items[].id`
+/// meaning what it means in the drift report.
+///
+/// Uncapped because a shape is a claim about all of them: [`values_at`] keeps
+/// the first few distinct values, which is right for listing choices and
+/// wrong for a pattern that the rest of the sample then has to match.
+pub fn strings_at<'a>(payloads: &'a [Value], path: &str) -> Vec<&'a str> {
+    let mut current: Vec<&Value> = payloads.iter().collect();
+    for segment in path.split('.') {
+        let key = segment.trim_end_matches("[]");
+        let depth = (segment.len() - key.len()) / 2;
+        current = current.into_iter().filter_map(|v| v.get(key)).collect();
+        for _ in 0..depth {
+            current = current
+                .into_iter()
+                .filter_map(Value::as_array)
+                .flatten()
+                .collect();
+        }
+    }
+    current.into_iter().filter_map(Value::as_str).collect()
+}
+
+/// Every scalar value the sample carries at one dotted path.
+///
+/// The same path naming the drift report uses, so `items[].id` means here
+/// what it means there — and the values come back in the order they were
+/// first seen, capped the way every other observation is.
+pub fn values_at(payloads: &[Value], path: &str) -> Vec<Value> {
+    let mut observed: BTreeMap<String, Observation> = BTreeMap::new();
+    for payload in payloads {
+        let mut per_event: BTreeMap<String, Seen> = BTreeMap::new();
+        observe(payload, "", &mut per_event);
+        for (seen_path, seen) in per_event {
+            observed.entry(seen_path).or_default().absorb(seen);
+        }
+    }
+    observed.get(path).map(Observation::values).unwrap_or_default()
+}
+
+/// Events in which a field could have been missing at all: those carrying the
+/// object it is a property of, or every event for a top-level field.
+///
+/// An object, specifically — an optional `metadata` sent as `null` holds no
+/// properties, and the validator asks nothing of it. Counting every event
+/// reported a required `metadata.trackingId` as absent from each event that
+/// had no `metadata`, while the validator accepted all of them.
+fn carriers(path: &str, observed: &BTreeMap<String, Observation>, sampled: usize) -> usize {
+    match path.rsplit_once('.') {
+        Some((parent, _)) => observed
+            .get(parent)
+            .and_then(|o| o.type_counts.get("object"))
+            .copied()
+            .unwrap_or(0),
+        None => sampled,
     }
 }
 
@@ -712,7 +779,11 @@ pub fn check_events(
                     }
                 }
 
-                if field.required && *seen_in < sampled {
+                // Against the events that carried its object, not all of
+                // them: a required property of an optional object is only
+                // required when the object is there, and the validator only
+                // rejects it then.
+                if field.required && *seen_in < carriers(path, &observed, sampled) {
                     drift.missing_required.push(FieldObservation {
                         path: path.clone(),
                         types: types.clone(),
@@ -748,11 +819,7 @@ pub fn check_events(
         // Only where there was something to hold it, though: a required
         // property of an object no event carries is not itself missing. Its
         // parent is, and that is the row worth showing.
-        let parent_sent = match path.rsplit_once('.') {
-            Some((parent, _)) => observed.contains_key(parent),
-            None => sampled > 0,
-        };
-        if field.required && parent_sent {
+        if field.required && carriers(path, &observed, sampled) > 0 {
             drift.missing_required.push(FieldObservation {
                 path: path.clone(),
                 types: Vec::new(),
@@ -784,7 +851,9 @@ pub fn check_events(
         .into_iter()
         .map(|(class, group)| (group, class))
         .collect();
-    let issues = build_issues(&drift, &classified, sampled);
+    // `observed` itself rather than a copy of it: cloning every value of every
+    // path first was work done for the healthy schemas.
+    let issues = build_issues(&drift, &classified, payloads, &observed);
 
     let mut failures: Vec<FailureGroup> = classified.into_iter().map(|(f, _)| f).collect();
     failures.sort_by_key(|f| std::cmp::Reverse(f.count));
@@ -1043,8 +1112,10 @@ fn repairable(path: &str) -> bool {
 fn build_issues(
     drift: &DriftReport,
     failures: &[(FailureGroup, FailureClass)],
-    sampled: usize,
+    payloads: &[Value],
+    observed: &BTreeMap<String, Observation>,
 ) -> Vec<Issue> {
+    let sampled = payloads.len();
     let mut issues: Vec<Issue> = Vec::new();
 
     // Indexed rather than scanned: one failure can explain several issues (an
@@ -1154,7 +1225,7 @@ fn build_issues(
     }
 
     for field in &drift.missing_required {
-        let absent = sampled.saturating_sub(field.seen_in);
+        let absent = carriers(&field.path, observed, sampled).saturating_sub(field.seen_in);
         let (affected, rejects, message) =
             from_failure(take("missingRequired", &field.path, &mut used), absent);
         issues.push(Issue {
@@ -1326,15 +1397,38 @@ fn build_issues(
             rejects: true,
             example: failure.example.clone(),
             message: Some(failure.message.clone()),
-            // A pattern, a format, a bound. Which constraint to relax, and to
-            // what, is a judgement the sample does not contain.
-            fix: None,
+            // Which constraint to relax, and to what, is mostly a judgement
+            // the sample does not contain — a bound, a required combination.
+            // The exception is a string the events cannot satisfy: if they
+            // all share a shape, that shape is a constraint the sample *does*
+            // contain, and a better repair than deleting the check.
+            fix: pattern_repair(&path, class, payloads),
             impact: None,
         });
     }
 
     rank(&mut issues);
     issues
+}
+
+/// The shape the values at a path share, for a rejection about their spelling.
+///
+/// Only for a `format` or `pattern` check: those are the ones that say "this
+/// string is the wrong shape", and the answer to them can be the shape the
+/// strings are. A bound or a required combination has no such answer, and
+/// guessing one would be worse than the rejection.
+fn pattern_repair(path: &str, class: &FailureClass, payloads: &[Value]) -> Option<Repair> {
+    if !repairable(path) {
+        return None;
+    }
+    let constraint = class.constraint();
+    if !constraint.ends_with("/format") && !constraint.ends_with("/pattern") {
+        return None;
+    }
+    // Every string at the path, not the capped value sample: a pattern
+    // checked against 32 of 500 ids pins run lengths the 33rd may not have.
+    crate::schema::shape::common_pattern(&strings_at(payloads, path))
+        .map(|pattern| Repair::ConstrainPattern { pattern })
 }
 
 /// Worst first, then by how much traffic each affects: the ranking is the
@@ -1750,6 +1844,54 @@ mod tests {
     }
 
     #[test]
+    fn a_required_field_of_an_optional_object_counts_only_where_the_object_is() {
+        // Half the events carry `metadata`, every one of those with its
+        // `trackingId`. The validator accepts all four; counting `trackingId`
+        // against every event reported it absent from half of them.
+        let doc = json!({
+            "components": { "schemas": {
+                "T": {
+                    "type": "object",
+                    "properties": { "metadata": { "$ref": "#/components/schemas/M" } }
+                },
+                "M": {
+                    "type": "object",
+                    "nullable": true,
+                    "required": ["trackingId"],
+                    "properties": { "trackingId": { "type": "string" } }
+                }
+            }}
+        });
+        let events = vec![
+            json!({ "metadata": { "trackingId": "a" } }),
+            json!({ "metadata": { "trackingId": "b" } }),
+            json!({}),
+            // Null holds no properties, so nothing is missing from it.
+            json!({ "metadata": null }),
+        ];
+        let report = check_events(&doc, "T", &events).unwrap();
+        assert_eq!(report.passed, 4, "{:?}", report.failures);
+        assert!(
+            report.drift.missing_required.is_empty(),
+            "{:?}",
+            report.drift.missing_required
+        );
+
+        // Where the object is sent without it, it is missing — from that
+        // event only.
+        let mut events = events;
+        events.push(json!({ "metadata": {} }));
+        let report = check_events(&doc, "T", &events).unwrap();
+        let issue = report
+            .issues
+            .iter()
+            .find(|i| i.key == "missingRequired:metadata.trackingId")
+            .unwrap_or_else(|| panic!("{:?}", report.issues));
+        assert_eq!(issue.affected, 1);
+        assert_eq!(report.failed, 1);
+    }
+
+    #[test]
     fn counts_each_missing_required_property_on_its_own() {
         // The validator reports both at the pointer of the object that lacks
         // them, under the same `required` keyword. Grouped by that alone, the
@@ -2077,6 +2219,114 @@ mod tests {
         assert!(clipped.ends_with('…'));
         // Short messages are left exactly as they are.
         assert_eq!(clip("already short", 140), "already short");
+    }
+
+    #[test]
+    fn a_format_nothing_honours_is_repaired_with_the_shape_the_events_have() {
+        // Declared `format: uuid`, and every event carries something that is
+        // plainly structured and plainly not a uuid. Dropping the format
+        // leaves a string that accepts anything; the shape is the better
+        // answer, and the sample contains it.
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "properties": { "claimId": { "type": "string", "format": "uuid" } }
+            }}}
+        });
+        let events = vec![
+            json!({ "claimId": "1677831-ff2a5b8e8c8aa859" }),
+            json!({ "claimId": "1677832-0a1b2c3d4e5f6789" }),
+        ];
+
+        let report = check_events(&doc, "T", &events).unwrap();
+        let rejection = report
+            .issues
+            .iter()
+            .find(|i| i.kind == IssueKind::Rejected)
+            .unwrap_or_else(|| panic!("{:?}", report.issues));
+        assert_eq!(
+            rejection.fix,
+            Some(crate::schema::repair::Repair::ConstrainPattern {
+                pattern: r"^\d{7}-[0-9a-f]{16}$".to_string(),
+            }),
+        );
+    }
+
+    #[test]
+    fn the_shape_offered_holds_for_every_event_not_the_first_few() {
+        // Forty distinct seven-digit ids, then one of eight: past the value
+        // sampler's cap, so a pattern built from what it kept pinned `\d{7}`
+        // and the repair rejected an event in the very sample it came from.
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "properties": { "items": { "type": "array", "items": {
+                    "type": "object",
+                    "properties": { "ref": { "type": "string", "format": "uuid" } }
+                }}}
+            }}}
+        });
+        let mut events: Vec<Value> = (0..40)
+            .map(|n| json!({ "items": [{ "ref": format!("{}-ab", 1_000_000 + n) }] }))
+            .collect();
+        events.push(json!({ "items": [{ "ref": "12345678-ab" }] }));
+
+        let report = check_events(&doc, "T", &events).unwrap();
+        let fix = report
+            .issues
+            .iter()
+            .find_map(|i| i.fix.clone())
+            .unwrap_or_else(|| panic!("{:?}", report.issues));
+        assert_eq!(
+            fix,
+            crate::schema::repair::Repair::ConstrainPattern {
+                pattern: r"^\d{7,8}-[a-z]{2}$".to_string(),
+            },
+        );
+        assert_eq!(strings_at(&events, "items[].ref").len(), 41);
+    }
+
+    #[test]
+    fn a_bound_is_still_a_judgement_the_sample_cannot_make() {
+        // `minLength` says nothing about the shape of what was sent, so there
+        // is no repair to offer — the old behaviour, kept deliberately.
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "properties": { "note": { "type": "string", "minLength": 20 } }
+            }}}
+        });
+        let events = vec![json!({ "note": "ab-12" }), json!({ "note": "cd-34" })];
+
+        let report = check_events(&doc, "T", &events).unwrap();
+        let rejection = report
+            .issues
+            .iter()
+            .find(|i| i.kind == IssueKind::Rejected)
+            .unwrap();
+        assert_eq!(rejection.fix, None);
+    }
+
+    #[test]
+    fn values_with_no_shape_in_common_are_left_alone() {
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "properties": { "claimId": { "type": "string", "format": "uuid" } }
+            }}}
+        });
+        let events = vec![
+            json!({ "claimId": "1677831-ff2a5b8e8c8aa859" }),
+            json!({ "claimId": "a sentence, really" }),
+        ];
+
+        let report = check_events(&doc, "T", &events).unwrap();
+        let rejection = report
+            .issues
+            .iter()
+            .find(|i| i.kind == IssueKind::Rejected)
+            .unwrap();
+        assert_eq!(rejection.fix, None);
     }
 
     #[test]

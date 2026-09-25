@@ -19,6 +19,7 @@ import {
   ModalDescription,
   ModalTitle,
   Note,
+  OpenLink,
   Spinner,
   cn,
 } from '@/components/ui'
@@ -208,9 +209,7 @@ export function BulkFileDialog({
                       {result && (
                         <Badge tone={OUTCOMES[result.outcome].tone}>
                           {result.ticket?.url ? (
-                            <a href={result.ticket.url} target="_blank" rel="noreferrer">
-                              {result.ticket.key}
-                            </a>
+                            <OpenLink url={result.ticket.url}>{result.ticket.key}</OpenLink>
                           ) : (
                             OUTCOMES[result.outcome].label
                           )}

@@ -56,15 +56,30 @@ impl Environment {
         }
     }
 
-    /// The log group carrying the bus's own events, as opposed to the one for
-    /// events arriving over the bridge — by the naming `for_stage` uses, with
-    /// the first group as the fallback for environments named by hand.
+    /// The log group carrying the bus's own events, as opposed to the external
+    /// bus's redacted copies — by the naming `for_stage` uses, with the first
+    /// group that is not a redacted copy as the fallback for environments
+    /// named by hand.
     pub fn bus_log_group(&self) -> Option<&str> {
         self.log_groups
             .iter()
             .find(|g| g.contains("global-events"))
+            .or_else(|| self.log_groups.iter().find(|g| !Self::is_redacted_copy(g)))
             .or(self.log_groups.first())
             .map(String::as_str)
+    }
+
+    /// Whether a log group records the external bus: a copy of every bus event
+    /// made after `preprocessExternalEventDetail` has cut it down, not what the
+    /// producer sent.
+    ///
+    /// Those copies drop fields (`billing-medical@payment-authorized` keeps
+    /// only `clientId`) and add others (`create-client` gains `clientEmail`),
+    /// so they are evidence that a type flows and nothing more. Graded as
+    /// payloads, they showed half of every bridged type's events as missing
+    /// its required fields.
+    pub fn is_redacted_copy(log_group: &str) -> bool {
+        log_group.contains("external-events")
     }
 
     /// True when writes to this environment should require extra confirmation.

@@ -1,6 +1,7 @@
 import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 import * as Dialog from '@radix-ui/react-dialog'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import * as SelectMenuPrimitive from '@radix-ui/react-select'
 import type { ReactNode } from 'react'
 import { useState } from 'react'
@@ -527,6 +528,44 @@ export function Badge({
     >
       {children}
     </span>
+  )
+}
+
+/**
+ * A link to somewhere outside the app.
+ *
+ * `<a target="_blank">` opens nothing here: a webview has no tab to open one
+ * in, and no browser behind it. So the href is never followed — it is there
+ * for what a screen reader announces and what the right-click menu offers —
+ * and the click hands the URL to the opener plugin, which gives it to the
+ * system browser, the same way the repo links and the sign-in flow do.
+ *
+ * Clicks stop here, because these sit inside rows that navigate.
+ */
+export function OpenLink({
+  url,
+  className,
+  title,
+  children,
+}: {
+  url: string
+  className?: string
+  title?: string
+  children: ReactNode
+}) {
+  return (
+    <a
+      href={url}
+      title={title ?? url}
+      onClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        void openUrl(url)
+      }}
+      className={className}
+    >
+      {children}
+    </a>
   )
 }
 

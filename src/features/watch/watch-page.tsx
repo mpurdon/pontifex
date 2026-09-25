@@ -1,12 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import {
   Bell,
   BellOff,
   Eye,
   EyeOff,
-  Braces,
   ChevronDown,
   ChevronRight,
   FlaskConical,
@@ -16,7 +14,6 @@ import {
   Square,
   Trash2,
   BellRing,
-  FilePlus2,
   Gauge,
   RefreshCw,
   X,
@@ -34,6 +31,8 @@ import { FileTicketDialog, FiledChip } from '@/features/jira/file-ticket-dialog'
 import { formatAge, formatDateTime, formatMoment, formatTime, stringify } from '@/lib/format'
 import { TimeZoneToggle } from '@/components/time-zone-toggle'
 import { ConditionEditor } from './conditions'
+import { useSchemaIndex } from '@/features/schemas/schema-links'
+import { SchemaRowActions } from '@/features/schemas/schema-row-actions'
 import {
   Badge,
   Button,
@@ -286,27 +285,11 @@ export function WatchPage() {
   const pollNow = useMutation<void, IpcError>({ mutationFn: () => ipc.pollNow(envId) })
 
   /**
-   * Which event types have a registered schema. Shares the Schemas screen's
-   * cache key, so the list is fetched once for both. A hit whose type has no
-   * schema gets "draft one from traffic" rather than a broken link — the same
-   * choice the Health report makes for undocumented types.
+   * Which event types have a registered schema. A hit whose type has none
+   * gets "draft one from traffic" rather than a broken link — the same choice
+   * the Health report makes for undocumented types.
    */
-  const schemas = useQuery({
-    queryKey: ['schemas', envId, 'list'],
-    queryFn: () => ipc.listSchemas(envId),
-    enabled: !!envId,
-    retry: false,
-  })
-  const schemaByIdentity = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const schema of schemas.data ?? []) {
-      map.set(schema.name, schema.name)
-      if (schema.source && schema.detailType) {
-        map.set(`${schema.source}@${schema.detailType}`, schema.name)
-      }
-    }
-    return map
-  }, [schemas.data])
+  const schemaIndex = useSchemaIndex(envId)
 
   /** Hit colour per watch id, from each watch's own choice or its list position. */
   const colors = useMemo(() => {
@@ -553,12 +536,8 @@ export function WatchPage() {
                       key={row.hit.id}
                       hit={row.hit}
                       color={colors.get(row.hit.watchId) ?? null}
-                      schemaName={
-                        row.hit.source && row.hit.detailType
-                          ? (schemaByIdentity.get(`${row.hit.source}@${row.hit.detailType}`) ?? null)
-                          : null
-                      }
-                      schemasKnown={schemas.isSuccess}
+                      schemaName={schemaIndex.nameFor(row.hit.source, row.hit.detailType)}
+                      schemasKnown={schemaIndex.known}
                       environment={activeEnvironment}
                       isNew={row.hit.receivedAt > (openedAt.current ?? 0)}
                       expanded={expanded.has(row.hit.id)}
@@ -1551,8 +1530,8 @@ function HitRow({
   expanded: boolean
   onToggle: () => void
 }) {
-  const navigate = useNavigate()
   const { timeZone } = useSettings()
+  /** Still needed below: the expanded panel grades and looks up by identity. */
   const identity = hit.source && hit.detailType ? `${hit.source}@${hit.detailType}` : null
 
   return (
@@ -1599,38 +1578,14 @@ function HitRow({
           {hit.detailType ?? '—'}
         </td>
         <td className="pr-1 text-right whitespace-nowrap">
-          {identity && schemasKnown && schemaName && (
-            <Button
-              variant="ghost"
-              size="sm"
-              title={`Open schema ${schemaName}`}
-              onClick={(e) => {
-                e.stopPropagation()
-                navigate(`/schemas?select=${encodeURIComponent(schemaName)}`)
-              }}
-            >
-              <Braces className="size-3" />
-            </Button>
-          )}
-          {identity && schemasKnown && !schemaName && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-warn"
-              title={`No schema is registered for ${identity}. Draft one from the events within a minute of this hit. Health can do the wider analysis later.`}
-              onClick={(e) => {
-                e.stopPropagation()
-                // The hit's group and time make this a two-minute scan of one
-                // group rather than a day of every group: near-instant, and
-                // enough to draft from. The Health report is the wide view.
-                navigate(
-                  `/schemas?draft=${encodeURIComponent(identity)}&group=${encodeURIComponent(hit.logGroup)}&around=${hit.timestamp}`,
-                )
-              }}
-            >
-              <FilePlus2 className="size-3" />
-            </Button>
-          )}
+          <SchemaRowActions
+            source={hit.source}
+            detailType={hit.detailType}
+            logGroup={hit.logGroup}
+            timestamp={hit.timestamp}
+            schemaName={schemaName}
+            known={schemasKnown}
+          />
           <CopyButton text={stringify(hit.event)} title="Copy event JSON" />
         </td>
       </tr>

@@ -3,6 +3,7 @@ import type {
   AiRequest,
   AiResponse,
   EventTicket,
+  FieldSample,
   AuthorizeUrlParts,
   ApplyImportResult,
   BedrockModel,
@@ -571,6 +572,17 @@ export const setJiraFieldDefaults = (
   projectKey: string,
   fields: Record<string, unknown>,
 ) => invoke<void>('set_jira_field_defaults', { projectKey, fields })
+
+/**
+ * What the cached events carry at a field's path: the shape they share, and
+ * the distinct values among them.
+ *
+ * Reads the event cache, so it costs nothing and needs no AWS call.
+ */
+export const fieldSample = (
+  request: { name: string; path: string; minutes?: number },
+  envId?: string,
+) => invoke<FieldSample>('field_sample', { request, envId })
 
 /** Render a ticket without filing it, and report any ticket already open for it. */
 export const previewJiraTicket = (issues: Issue[], context: TicketContext) =>

@@ -28,6 +28,7 @@ import {
   Field,
   Input,
   Note,
+  OpenLink,
   Panel,
   Select,
   Spinner,
@@ -366,15 +367,13 @@ export function JiraSection({
               <Badge tone="neutral">not connected</Badge>
             )}
             {status.data.site?.url && (
-              <a
-                href={status.data.site.url}
-                target="_blank"
-                rel="noreferrer"
+              <OpenLink
+                url={status.data.site.url}
                 className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
               >
                 {status.data.site.name ?? status.data.site.url}
                 <ExternalLink className="size-2.5" />
-              </a>
+              </OpenLink>
             )}
             {status.data.detail && (
               <span className="text-[10px] text-ink-faint">{status.data.detail}</span>
@@ -390,14 +389,12 @@ export function JiraSection({
           <span>
             Atlassian supports only the authorization-code grant, so Pontifex needs a
             client ID <em>and</em> secret from an app registered in the{' '}
-            <a
+            <OpenLink
               className="underline"
-              href="https://developer.atlassian.com/console/myapps/"
-              target="_blank"
-              rel="noreferrer"
+              url="https://developer.atlassian.com/console/myapps/"
             >
               developer console
-            </a>
+            </OpenLink>
             . Set its callback URL to{' '}
             <span className="font-mono text-ink">{draft.jira.callbackUrl}</span> and grant
             it <span className="font-mono text-ink">read:jira-work</span>,{' '}

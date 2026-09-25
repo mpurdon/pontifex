@@ -28,13 +28,12 @@ export type NodeType = (typeof NODE_TYPES)[number] | 'ref' | 'unknown'
  * same grey box as `title`. Anything the bus can reject an event over deserves
  * a control.
  */
-const NUMERIC_BOUNDS = [
-  'minimum',
-  'maximum',
-  'exclusiveMinimum',
-  'exclusiveMaximum',
-  'multipleOf',
-] as const
+// No `exclusiveMinimum`/`exclusiveMaximum`: OpenAPI 3.0 spells them as
+// booleans modifying `minimum`/`maximum`, so the registry refuses the number,
+// and Ajv — which the bus validates with — refuses the boolean. Offering them
+// is offering a document that cannot be saved. `Fix` rewrites one that is
+// already there into its inclusive neighbour.
+const NUMERIC_BOUNDS = ['minimum', 'maximum', 'multipleOf'] as const
 
 export const CONSTRAINTS = {
   string: ['minLength', 'maxLength', 'pattern'],
@@ -613,8 +612,10 @@ export function isNonEmpty(type: NodeType, constraints: Record<string, unknown>)
       const min = constraints.minLength
       return typeof min === 'number' && min >= 1
     }
-    case 'number':
-    case 'integer': {
+    // Still reads an `exclusiveMinimum` left by an older draft, so a document
+    // that has one shows the toggle on rather than silently unticked.
+    case 'integer':
+    case 'number': {
       const above = constraints.exclusiveMinimum
       const min = constraints.minimum
       return (
@@ -633,8 +634,12 @@ export function isNonEmpty(type: NodeType, constraints: Record<string, unknown>)
  * bound alone — a string that must be four characters is already non-empty.
  * Turning it off removes the lower bound entirely, because that is what
  * allowing empty means, even where the bound was tighter than one.
- * `exclusiveMinimum` is written as a number, the draft-07 spelling the bus
- * validates under and the inspector already edits.
+ *
+ * Offered for integers but not for floats, because only an integer can say
+ * "greater than zero" in a spelling that survives the registry: `minimum: 1`.
+ * The exclusive bound that would say it for a float is refused by OpenAPI 3.0
+ * as a number and by Ajv as a boolean, so a toggle for one would write a
+ * document that cannot be saved — which is what it used to do.
  */
 export function nonEmptyPatch(
   type: NodeType,
@@ -645,10 +650,14 @@ export function nonEmptyPatch(
     case 'string':
       if (on) return isNonEmpty(type, constraints) ? {} : { minLength: 1 }
       return { minLength: undefined }
-    case 'number':
     case 'integer':
-      if (on) return isNonEmpty(type, constraints) ? {} : { exclusiveMinimum: 0 }
+      if (on) return isNonEmpty(type, constraints) ? {} : { minimum: 1 }
       return { exclusiveMinimum: undefined, minimum: undefined }
+    // Nothing to offer a float: "greater than zero" needs the exclusive bound
+    // the registry refuses. Turning it *off* still works, so a draft written
+    // by the old toggle can be cleared rather than sitting there unsavable.
+    case 'number':
+      return on ? null : { exclusiveMinimum: undefined, minimum: undefined }
     default:
       return null
   }

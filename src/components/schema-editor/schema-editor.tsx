@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
+import * as ipc from '@/lib/ipc'
 import {
   Box,
   Copy,
@@ -34,7 +36,7 @@ import {
 } from '@/lib/schema-model'
 import { buildSampleEvent, putEventsCommand } from '@/lib/sample-event'
 import { stringify } from '@/lib/format'
-import type { Finding, TicketContext } from '@/lib/types'
+import type { Finding, FieldSample, IpcError, TicketContext } from '@/lib/types'
 import { ConcernDialog, type ConcernSubject } from '@/features/jira/concern-dialog'
 import { fieldPathFromPointer } from '@/lib/schema-model'
 import {
@@ -59,7 +61,7 @@ import {
   ResizeHandle,
 } from '@/components/resizable'
 import { SchemaTree } from './tree'
-import { Inspector } from './inspector'
+import { Inspector, type Inferred } from './inspector'
 
 /** Summary badges for pending changes, in the order they read best. */
 const CHANGE_BADGES: {
@@ -72,6 +74,15 @@ const CHANGE_BADGES: {
   { kind: 'removed', tone: 'danger', sign: '−', title: 'Fields this draft removes' },
   { kind: 'changed', tone: 'warn', sign: '~', title: 'Fields this draft modifies' },
 ]
+
+/**
+ * Most values a field can have and still be a list of choices.
+ *
+ * Twenty is generous for a status or a category and far short of anything
+ * that identifies something. Past it the list would be a snapshot of one
+ * sample, and the next event would be rejected for not being in it.
+ */
+const ENUM_LIMIT = 20
 
 /** The three things the right-hand column can show about the tree. */
 type SideTab = 'details' | 'analysis' | 'origin' | 'sample'
@@ -227,6 +238,83 @@ export function SchemaEditor({
     }
   }, [schemaName, environmentLabel, envId, registryName, activeSchema])
 
+  /**
+   * Fill in a `pattern`, or a list of allowed values, from what the events
+   * carry.
+   *
+   * The same inference the Analysis tab offers as a repair when a format
+   * rejects live traffic — here it is available before anything has been
+   * rejected, which is when a schema is being written.
+   */
+  const [sampleNote, setSampleNote] = useState<{ what: Inferred; note: string } | null>(null)
+  const inferField = useMutation<
+    FieldSample,
+    IpcError,
+    { node: SchemaNode; what: Inferred }
+  >({
+    mutationFn: ({ node }) =>
+      ipc.fieldSample(
+        { name: schemaName ?? '', path: fieldPathFromPointer(node.ownPointer) },
+        envId,
+      ),
+    onSuccess: (result, { node, what }) => {
+      const note = (text: string) => setSampleNote({ what, note: text })
+      // Why there is no answer, rather than a button that appears to do
+      // nothing: the reasons want different things from the user.
+      if (result.sampled === 0) {
+        return note('No cached events for this type yet — run the Analysis tab first.')
+      }
+      const distinct = result.values.length
+      if (distinct < 2) {
+        return note(
+          `Only ${distinct === 1 ? 'one distinct value' : 'no scalar values'} in ${result.sampled} cached event${result.sampled === 1 ? '' : 's'} — enough to guess from, not enough to be right about. Sample a wider window.`,
+        )
+      }
+
+      if (what === 'pattern') {
+        if (!result.pattern) {
+          return note(
+            `The ${distinct} values here have no shape in common, so any pattern covering them would accept almost anything.`,
+          )
+        }
+        onChange(setKeywords(document, node.pointer, { pattern: result.pattern }))
+        return setSampleNote(null)
+      }
+
+      // Past this many, a field is an identifier rather than a list of
+      // choices, and writing them all down would reject the next one.
+      if (distinct > ENUM_LIMIT) {
+        // `capped` rather than comparing against the sampler's own limit,
+        // which the backend would then be keeping in two languages.
+        return note(
+          `${distinct}${result.capped ? '+' : ''} distinct values — too many to be a list of allowed values. This reads as an identifier, not a choice.`,
+        )
+      }
+      // The values of the field's own type: the wand is offered on integer and
+      // number fields too, and keeping only strings refused every one of them.
+      const kind = node.type === 'integer' ? 'integers' : node.type === 'number' ? 'numbers' : 'strings'
+      const values = result.values.filter((value) =>
+        kind === 'integers'
+          ? Number.isInteger(value)
+          : kind === 'numbers'
+            ? typeof value === 'number'
+            : typeof value === 'string',
+      )
+      if (values.length < 2) {
+        return note(`The values here are not ${kind}, so there is no list to write.`)
+      }
+      // `enum` is checked apart from `nullable`, so a list without null
+      // rejects every event that sends one on a field that allows it.
+      onChange(
+        setKeywords(document, node.pointer, {
+          enum: node.acceptsNull ? [...values, null] : values,
+        }),
+      )
+      setSampleNote(null)
+    },
+    onError: (error, { what }) => setSampleNote({ what, note: error.message }),
+  })
+
   const raiseFieldConcern = (node: SchemaNode) => {
     const path = fieldPathFromPointer(node.ownPointer)
     const declared = [
@@ -244,6 +332,8 @@ export function SchemaEditor({
         : null
     setConcern({ path, label: `the field ${path}`, declared, observed })
   }
+
+  useEffect(() => setSampleNote(null), [selectedId])
 
   useEffect(() => {
     if (!activeSchema || !schemaNames.includes(activeSchema)) {
@@ -714,6 +804,11 @@ export function SchemaEditor({
                 onSetAcceptsNull={(node, accepts) =>
                   onChange(setAcceptsNull(document, node.pointer, accepts))
                 }
+                // The note is cleared on whichever answer comes back, so
+                // clearing it on the way out too would only be ceremony.
+                onInfer={envId ? (node, what) => inferField.mutate({ node, what }) : undefined}
+                inferring={inferField.isPending ? inferField.variables?.what : undefined}
+                sampleNote={sampleNote}
                 onSetRefTarget={(node, target) =>
                   onChange(setRefTarget(document, node.ownPointer, target))
                 }

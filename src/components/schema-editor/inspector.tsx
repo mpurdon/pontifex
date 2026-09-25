@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, Bug, Link2, Trash2 } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { AlertTriangle, Bug, Link2, Trash2, Wand2 } from 'lucide-react'
 import {
   CONSTRAINTS,
   NODE_TYPES,
@@ -8,7 +9,58 @@ import {
   isNonEmpty,
   nonEmptyPatch,
 } from '@/lib/schema-model'
-import { Badge, Button, Checkbox, Field, Input, Select } from '@/components/ui'
+import { Badge, Button, Checkbox, Field, Input, Select, cn } from '@/components/ui'
+
+/**
+ * What the sampled events can be asked to fill in for a field.
+ *
+ * Lives here rather than in the editor because the buttons that ask are
+ * here, and the editor already imports from this file.
+ */
+export type Inferred = 'pattern' | 'values'
+
+/** Everything the two infer buttons need, so neither can drift from the other. */
+interface InferProps {
+  onInfer?: (node: SchemaNode, what: Inferred) => void
+  /** Which inference is in flight, if any. */
+  inferring?: Inferred
+  /** Why an inference had no answer, and which one it was. */
+  sampleNote?: { what: Inferred; note: string } | null
+}
+
+/** Ask the events to fill this field in. */
+function InferButton({
+  node,
+  what,
+  title,
+  onInfer,
+  inferring,
+}: InferProps & { node: SchemaNode; what: Inferred; title: string }) {
+  if (!onInfer) return null
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="shrink-0"
+      disabled={inferring === what}
+      onClick={() => onInfer(node, what)}
+      title={title}
+    >
+      <Wand2 className={cn('size-3', inferring === what && 'animate-pulse')} />
+    </Button>
+  )
+}
+
+/**
+ * Why an inference had no answer.
+ *
+ * A button that appears to do nothing is worse than one that says why, and
+ * the reasons want different things from the reader.
+ */
+function SampleNote({ what, sampleNote }: InferProps & { what: Inferred }) {
+  if (sampleNote?.what !== what) return null
+  return <span className="text-[10px] text-warn">{sampleNote.note}</span>
+}
 
 /**
  * The string formats the bus actually asserts.
@@ -106,6 +158,14 @@ export interface InspectorProps {
   /** Widen or narrow `type` to include `"null"`. */
   onSetAcceptsNull: (node: SchemaNode, accepts: boolean) => void
   onSetRefTarget: (node: SchemaNode, target: string) => void
+  /**
+   * Fill in a constraint from the values the sampled events carry. `onInfer`
+   * is absent when there is no environment to read events from, which is
+   * also when there would be nothing to infer from.
+   */
+  onInfer?: InferProps['onInfer']
+  inferring?: Inferred
+  sampleNote?: InferProps['sampleNote']
   onRemove: (node: SchemaNode) => void
   onFollowRef: (target: string) => void
   /**
@@ -130,10 +190,13 @@ function ConstraintField({
   keyword,
   value,
   onCommit,
+  infer,
 }: {
   keyword: string
   value: unknown
   onCommit: (value: unknown) => void
+  /** The wand, for the one constraint the events can answer. */
+  infer?: ReactNode
 }) {
   const { label, hint, kind } = CONSTRAINT_FIELDS[keyword] ?? {
     label: keyword,
@@ -141,6 +204,11 @@ function ConstraintField({
     kind: 'text' as const,
   }
   const [text, setText] = useState(value === undefined ? '' : String(value))
+  // The box is keyed on the field, not on the value, so it survives an edit
+  // made anywhere else — and showed the old text when one happened. Inferring
+  // a pattern writes to the document and the input stayed empty, which read
+  // as the button doing nothing at all.
+  useEffect(() => setText(value === undefined ? '' : String(value)), [value])
 
   if (kind === 'boolean') {
     return (
@@ -166,16 +234,21 @@ function ConstraintField({
 
   return (
     <Field label={label} hint={hint || undefined}>
-      <Input
-        value={text}
-        inputMode={numeric ? 'decimal' : undefined}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-        placeholder="any"
-        className={numeric ? undefined : 'font-mono'}
-        spellCheck={false}
-      />
+      <div className="flex items-center gap-1">
+        <Input
+          value={text}
+          inputMode={numeric ? 'decimal' : undefined}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+          placeholder="any"
+          className={cn('min-w-0 flex-1', !numeric && 'font-mono')}
+          spellCheck={false}
+        />
+        {/* Writing a regular expression by hand is the part of this form
+            nobody enjoys, and the events already know the answer. */}
+        {infer}
+      </div>
     </Field>
   )
 }
@@ -191,6 +264,9 @@ export function Inspector({
   onSetKeywords,
   onSetAcceptsNull,
   onSetRefTarget,
+  onInfer,
+  inferring,
+  sampleNote,
   onRemove,
   onFollowRef,
   onConcern,
@@ -344,7 +420,22 @@ export function Inspector({
             </Select>
           </Field>
         ) : effectiveType === 'string' ? (
-          <Field label="Format">
+          // `regex` is the one format that reads as something it is not: it
+          // asserts the value *is* a regular expression, not that the value
+          // matches one. Picked for a field whose values happen to compile —
+          // most strings do — it buys a constraint that passes everything and
+          // says nothing. Pattern below is the keyword that constrains a
+          // value by a regex, and it needs no format at all.
+          <Field
+            label="Format"
+            hint={
+              node.format === 'regex'
+                ? 'asserts the value is itself a regular expression — to match values against one, use Pattern'
+                : node.format
+                  ? undefined
+                  : 'the bus enforces only the formats listed here — a shape of its own goes in Pattern'
+            }
+          >
             <Select
               value={node.format ?? ''}
               onChange={(e) =>
@@ -354,7 +445,11 @@ export function Inspector({
             >
               {STRING_FORMATS.map((format) => (
                 <option key={format} value={format}>
-                  {format || 'none'}
+                  {/* Not "none": a field with no format still has a shape,
+                      and reading this as "no shape" is what sends people
+                      looking for one among the formats — where `regex` is
+                      waiting to be misread. */}
+                  {format || 'no built-in format'}
                 </option>
               ))}
             </Select>
@@ -384,10 +479,18 @@ export function Inspector({
         />
         {/* `required` is satisfied by `""`, so a producer can send a required
             field and still send nothing. This is the bound that stops that. */}
-        <span title="Rejects an empty string, or zero and below for a number. Writes minLength: 1 or exclusiveMinimum: 0.">
+        <span title="Rejects an empty string, or zero and below for an integer. Writes minLength: 1 or minimum: 1.">
           <Checkbox
             checked={isNonEmpty(effectiveType, node.constraints)}
-            disabled={nonEmptyPatch(effectiveType, node.constraints, true) === null}
+            // Whether the *next* click has anything to do, so a bound left by
+            // an older draft can always be taken off again.
+            disabled={
+              nonEmptyPatch(
+                effectiveType,
+                node.constraints,
+                !isNonEmpty(effectiveType, node.constraints),
+              ) === null
+            }
             onChange={(e) => {
               const changes = nonEmptyPatch(effectiveType, node.constraints, e.target.checked)
               if (changes && Object.keys(changes).length > 0) onSetKeywords(node, changes)
@@ -456,15 +559,25 @@ export function Inspector({
         effectiveType === 'integer' ||
         effectiveType === 'number') && (
         <Field label="Allowed values" hint="comma separated; blank for any">
-          <Input
-            value={enumText}
-            onChange={(e) => setEnumText(e.target.value)}
-            onBlur={commitEnum}
-            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-            placeholder="queued, running, done"
-            className="font-mono"
-            spellCheck={false}
-          />
+          <div className="flex items-center gap-1">
+            <Input
+              value={enumText}
+              onChange={(e) => setEnumText(e.target.value)}
+              onBlur={commitEnum}
+              onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+              placeholder="queued, running, done"
+              className="min-w-0 flex-1 font-mono"
+              spellCheck={false}
+            />
+            <InferButton
+              node={node}
+              what="values"
+              title="List the values the sampled events actually carry"
+              onInfer={onInfer}
+              inferring={inferring}
+            />
+          </div>
+          <SampleNote what="values" sampleNote={sampleNote} />
         </Field>
       )}
 
@@ -480,9 +593,21 @@ export function Inspector({
                 keyword={keyword}
                 value={node.constraints[keyword]}
                 onCommit={(value) => onSetKeyword(node, keyword, value)}
+                infer={
+                  keyword === 'pattern' ? (
+                    <InferButton
+                      node={node}
+                      what="pattern"
+                      title="Work the pattern out from the values in the sampled events"
+                      onInfer={onInfer}
+                      inferring={inferring}
+                    />
+                  ) : undefined
+                }
               />
             ))}
           </div>
+          <SampleNote what="pattern" sampleNote={sampleNote} />
         </Field>
       )}
 

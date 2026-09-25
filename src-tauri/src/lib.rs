@@ -298,6 +298,7 @@ pub fn run() {
             commands::reality::check_against_events,
             commands::reality::cached_analysis,
             commands::reality::events_for_issue,
+            commands::reality::field_sample,
             commands::reality::apply_field_suggestions,
             commands::reality::add_observed_field,
             commands::reality::apply_issue_repair,

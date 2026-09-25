@@ -272,6 +272,14 @@ pub fn is_openapi_30_keyword(keyword: &str) -> bool {
 ///   OpenAPI 3.0 asserts a value is always null
 /// - `const: v` becomes `enum: [v]`; `examples: [v, …]` becomes `example: v`
 /// - `$schema`, `$id`, `id` and `$comment` are dropped
+/// - a numeric `exclusiveMinimum`/`exclusiveMaximum` folds into
+///   `minimum`/`maximum` — the one rewrite here that does not keep its
+///   meaning, widening the bound by its endpoint (an integer's excepted: it
+///   moves to the next whole number and means what it meant). It earns the exception
+///   because the alternative spellings are refused by the registry (as a
+///   number) and by Ajv (as a boolean), so there is no document that both
+///   accept and the constraint has to give somewhere. The finding that offers
+///   this says so before it is applied.
 ///
 /// Everything else the registry would refuse — a tuple `items`, a keyword
 /// OpenAPI 3.0 does not have — is left for `validate` to name, since there is
@@ -298,15 +306,81 @@ fn needs_openapi_30(map: &Map<String, Value>) -> bool {
         || map.get("type").and_then(Value::as_str) == Some("null")
         || map.contains_key("const")
         || map.contains_key("examples")
+        || ["exclusiveMinimum", "exclusiveMaximum"]
+            .iter()
+            .any(|k| map.get(*k).is_some_and(Value::is_number))
         || ["$schema", "$id", "id", "$comment"]
             .iter()
             .any(|k| map.contains_key(*k))
+}
+
+/// Fold a draft-07 numeric exclusive bound into its inclusive neighbour.
+///
+/// OpenAPI 3.0 spells these as booleans modifying `minimum`/`maximum`, so the
+/// registry refuses the number — and Ajv, which the bus validates with,
+/// refuses the boolean. Nothing satisfies both, which leaves the inclusive
+/// bound as the only sayable thing. `> 5` becomes `>= 5`: wider by exactly
+/// the endpoint, and the alternative is a document that cannot be saved.
+///
+/// Except for an integer, where there is no widening: `> 0` is `>= 1`, and
+/// folding it to `>= 0` quietly let through the zero the editor's
+/// "non-empty" toggle had been written to refuse.
+///
+/// The stricter of the two bounds wins where both are present, because that
+/// is the one the events were already being held to.
+fn fold_exclusive(map: &mut Map<String, Value>, exclusive: &str, inclusive: &str, keep_max: bool) {
+    let Some(bound) = map.get(exclusive).and_then(Value::as_f64) else {
+        return;
+    };
+    map.remove(exclusive);
+    let bound = match (integer_only(map), keep_max) {
+        (true, true) => bound.floor() + 1.0,
+        (true, false) => bound.ceil() - 1.0,
+        (false, _) => bound,
+    };
+    let held = map.get(inclusive).and_then(Value::as_f64);
+    let winner = match held {
+        Some(held) if keep_max => held.max(bound),
+        Some(held) => held.min(bound),
+        None => bound,
+    };
+    // Written as an integer when it is one, so an integer field's bound does
+    // not come back as `1.0`.
+    let number = if winner.fract() == 0.0 && winner.abs() < i64::MAX as f64 {
+        Some(serde_json::Number::from(winner as i64))
+    } else {
+        serde_json::Number::from_f64(winner)
+    };
+    if let Some(number) = number {
+        map.insert(inclusive.to_string(), Value::Number(number));
+    }
+}
+
+/// Whether a node accepts only integers — `type: integer`, or a type list
+/// whose only other member is `null`.
+fn integer_only(map: &Map<String, Value>) -> bool {
+    match map.get("type") {
+        Some(Value::String(t)) => t == "integer",
+        Some(Value::Array(list)) => {
+            let named: Vec<&str> = list
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|t| *t != "null")
+                .collect();
+            named == ["integer"]
+        }
+        _ => false,
+    }
 }
 
 fn openapi_30_node(map: &mut Map<String, Value>) {
     for key in ["$schema", "$id", "id", "$comment"] {
         map.remove(key);
     }
+    // A lower bound keeps the larger of the two, an upper bound the smaller:
+    // either way the tighter constraint survives.
+    fold_exclusive(map, "exclusiveMinimum", "minimum", true);
+    fold_exclusive(map, "exclusiveMaximum", "maximum", false);
     if let Some(value) = map.remove("const") {
         map.entry("enum").or_insert_with(|| json!([value]));
     }
@@ -373,6 +447,91 @@ pub fn schema_for_type(document: &Value, type_name: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_numeric_exclusive_bound_becomes_the_inclusive_one() {
+        // Written by the editor's own "non-empty" toggle, and then refused by
+        // the registry: OpenAPI 3.0 wants a boolean here and Ajv wants a
+        // number, so the inclusive bound is the only thing both accept.
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "properties": { "confidence": { "type": "number", "exclusiveMinimum": 0 } }
+            }}}
+        });
+
+        let (next, sites) = to_openapi_30(&doc);
+        let field = &next["components"]["schemas"]["T"]["properties"]["confidence"];
+        assert_eq!(field["minimum"], 0.0);
+        assert!(field.get("exclusiveMinimum").is_none(), "{field}");
+        assert_eq!(sites.len(), 1);
+    }
+
+    #[test]
+    fn an_integer_exclusive_bound_folds_without_widening() {
+        // `> 0` on an integer is `>= 1` exactly. Folding it to `>= 0` accepted
+        // the zero the "non-empty" toggle was written to refuse, and the
+        // toggle then read as off.
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "properties": {
+                    "count": { "type": "integer", "exclusiveMinimum": 0, "exclusiveMaximum": 10 },
+                    "maybe": { "type": ["integer", "null"], "exclusiveMinimum": 2.5 }
+                }
+            }}}
+        });
+
+        let (next, _) = to_openapi_30(&doc);
+        let props = &next["components"]["schemas"]["T"]["properties"];
+        assert_eq!(props["count"]["minimum"], json!(1));
+        assert_eq!(props["count"]["maximum"], json!(9));
+        assert_eq!(props["maybe"]["minimum"], json!(3));
+    }
+
+    #[test]
+    fn folding_a_bound_keeps_the_stricter_of_the_two() {
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "properties": {
+                    "score": {
+                        "type": "number",
+                        "minimum": 3,
+                        "exclusiveMinimum": 5,
+                        "maximum": 100,
+                        "exclusiveMaximum": 90
+                    }
+                }
+            }}}
+        });
+
+        let (next, _) = to_openapi_30(&doc);
+        let field = &next["components"]["schemas"]["T"]["properties"]["score"];
+        // 5 is the bound the events were already held to, and 90 likewise.
+        assert_eq!(field["minimum"], 5.0);
+        assert_eq!(field["maximum"], 90.0);
+    }
+
+    #[test]
+    fn the_boolean_spelling_is_left_alone() {
+        // `exclusiveMinimum: true` is legal OpenAPI 3.0. It is Ajv that
+        // refuses it, which is a different finding — not this rewrite's to
+        // make, and rewriting it would change what the document means.
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "properties": { "n": { "type": "number", "minimum": 1, "exclusiveMinimum": true } }
+            }}}
+        });
+
+        let (next, sites) = to_openapi_30(&doc);
+        assert!(sites.is_empty());
+        assert_eq!(
+            next["components"]["schemas"]["T"]["properties"]["n"]["exclusiveMinimum"],
+            true
+        );
+    }
 
     #[test]
     fn type_lists_become_nullable_or_any_of() {

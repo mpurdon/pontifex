@@ -29,6 +29,7 @@ import {
   ErrorBox,
   Input,
   Note,
+  OpenLink,
   Select,
   Toolbar,
   cn,
@@ -773,10 +774,8 @@ function FiledCell({ tickets }: { tickets?: EventTicket[] }) {
   const lead = tickets.find((t) => !t.done) ?? tickets[0]
   return (
     <span className="inline-flex items-center gap-1">
-      <a
-        href={lead.url}
-        target="_blank"
-        rel="noreferrer"
+      <OpenLink
+        url={lead.url}
         title={tickets.map((t) => `${t.key} · ${t.status} — ${t.summary}`).join('\n')}
         className={cn(
           'font-mono hover:underline',
@@ -784,7 +783,7 @@ function FiledCell({ tickets }: { tickets?: EventTicket[] }) {
         )}
       >
         {lead.key}
-      </a>
+      </OpenLink>
       {tickets.length > 1 && (
         <span className="text-ink-faint">+{tickets.length - 1}</span>
       )}

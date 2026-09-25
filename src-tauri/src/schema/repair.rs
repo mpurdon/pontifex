@@ -33,6 +33,13 @@ pub enum Repair {
     DropRequired,
     /// Refuse a blank string in a field that producers send empty.
     RequireNonEmpty,
+    /// Pin a field to the shape its values actually have.
+    ///
+    /// The repair for a rejection the events cannot satisfy — a `format` no
+    /// producer honours — where the values still have a structure worth
+    /// declaring. Replaces the constraint that rejects rather than removing
+    /// it: a plain string would accept the empty string and a sentence.
+    ConstrainPattern { pattern: String },
     /// Declare a field that events send and the schema does not describe.
     DeclareField {
         types: Vec<String>,
@@ -75,6 +82,9 @@ pub fn apply(document: &Value, type_name: &str, path: &str, repair: &Repair) -> 
         Repair::RequireNonEmpty => require_non_empty(&mut next, &pointer, &leaf, path),
         Repair::WidenType { types } => widen_type(&mut next, &pointer, &leaf, path, types),
         Repair::ExtendEnum { values } => extend_enum(&mut next, &pointer, &leaf, path, values),
+        Repair::ConstrainPattern { pattern } => {
+            constrain_pattern(&mut next, &pointer, &leaf, path, pattern)
+        }
         Repair::DeclareField { types, .. } => declare_field(&mut next, &pointer, &leaf, types),
     }?;
 
@@ -135,6 +145,34 @@ fn property_mut<'a>(
             "`{path}` is declared as {rendered}, which is not an object"
         ))
     })
+}
+
+/// Declare the shape a field's values have, in place of the check they fail.
+fn constrain_pattern(
+    document: &mut Value,
+    pointer: &str,
+    leaf: &str,
+    path: &str,
+    pattern: &str,
+) -> Result<()> {
+    if pattern.is_empty() {
+        return Err(Error::Invalid(format!(
+            "No pattern for `{path}` to be constrained to"
+        )));
+    }
+    let property = property_mut(document, pointer, leaf, path)?;
+
+    // The format is what rejects the events, so leaving it beside the pattern
+    // would repair nothing: `format: uuid` and a pattern the uuids do not
+    // match reject exactly what they rejected before.
+    property.remove("format");
+    property.insert("pattern".into(), json!(pattern));
+    // A pattern only means anything on a string, and the field is one — these
+    // are values the producers sent.
+    property
+        .entry("type".to_string())
+        .or_insert_with(|| json!("string"));
+    Ok(())
 }
 
 /// Rewrite a field's type to what events actually carry.
@@ -335,6 +373,33 @@ mod tests {
 
     fn property<'a>(document: &'a Value, pointer: &str) -> &'a Value {
         document.pointer(pointer).expect("property missing")
+    }
+
+    #[test]
+    fn constraining_to_a_pattern_replaces_the_format_that_rejects() {
+        let doc = json!({
+            "components": { "schemas": { "T": {
+                "type": "object",
+                "properties": { "claimId": { "type": "string", "format": "uuid" } }
+            }}}
+        });
+
+        let next = apply(
+            &doc,
+            "T",
+            "claimId",
+            &Repair::ConstrainPattern {
+                pattern: r"^\d{7}-[0-9a-f]{16}$".into(),
+            },
+        )
+        .unwrap();
+
+        let field = &next["components"]["schemas"]["T"]["properties"]["claimId"];
+        assert_eq!(field["pattern"], r"^\d{7}-[0-9a-f]{16}$");
+        assert_eq!(field["type"], "string");
+        // Left in place, the format would reject exactly what it rejected
+        // before and the repair would have changed nothing.
+        assert!(field.get("format").is_none(), "{field}");
     }
 
     #[test]

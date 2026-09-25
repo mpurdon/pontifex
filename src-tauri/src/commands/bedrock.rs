@@ -396,6 +396,13 @@ fn plausible(repair: &Repair) -> bool {
     let types = match repair {
         Repair::WidenType { types } | Repair::DeclareField { types, .. } => types,
         Repair::ExtendEnum { values } => return !values.is_empty(),
+        // Judged by the engine the bus judges with: `ajv::is_regex` uses
+        // `fancy_regex` precisely because the plain `regex` crate rejects the
+        // lookaround and backreferences Ajv accepts, so checking with that one
+        // would discard patterns the bus would have honoured.
+        Repair::ConstrainPattern { pattern } => {
+            return !pattern.is_empty() && crate::schema::ajv::is_regex(pattern)
+        }
         Repair::DropRequired | Repair::RequireNonEmpty => return true,
     };
     !types.is_empty() && types.iter().all(|t| JSON_TYPES.contains(&t.as_str()))

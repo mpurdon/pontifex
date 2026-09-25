@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
 import type { FilterStatus } from '@/features/report/status'
+import type { LogPage, LogQuery, WatchCondition } from '@/lib/types'
 
 interface WorkbenchValue {
   /** The schema the Schemas screen is focused on. */
@@ -30,6 +31,59 @@ interface WorkbenchValue {
   /** Whether rows dealt with since the report are hidden rather than dimmed. */
   healthHideDone: boolean
   setHealthHideDone: (hide: boolean) => void
+  /** What the Logs screen's filter bar is set to. */
+  logFilters: LogFilters
+  setLogFilters: (update: (prev: LogFilters) => LogFilters) => void
+  /** The search the Logs screen last ran, with the pages read for it. */
+  logRun: LogRun | null
+  /** Run a search: the query becomes the current one, continued pages drop. */
+  startLogRun: (envId: string, query: LogQuery) => void
+  /** Add a page read by "continue further back" to the current run. */
+  appendLogPage: (page: LogPage) => void
+  /** Back to how the Logs screen opens: filters at their defaults, no run. */
+  clearLogSearch: () => void
+}
+
+/** The Logs screen's filter bar. */
+export interface LogFilters {
+  logGroup: string
+  minutes: number
+  source: string
+  detailType: string
+  rawPattern: string
+  useRaw: boolean
+  /** Whether the payload-condition drawer is open. */
+  advanced: boolean
+  conditions: WatchCondition[]
+  /**
+   * What the last Search compiled `conditions` into. Kept with the filters so
+   * coming back to the screen does not have to compile the same thing again.
+   */
+  compiledPattern: string | null
+}
+
+export const defaultLogFilters: LogFilters = {
+  logGroup: '',
+  minutes: 60,
+  source: '',
+  detailType: '',
+  rawPattern: '',
+  useRaw: false,
+  advanced: false,
+  conditions: [],
+  compiledPattern: null,
+}
+
+/** A search that has been run, and everything read for it. */
+export interface LogRun {
+  /**
+   * The environment it was run against. A run belongs to its environment, so
+   * switching environments retires it rather than mixing two accounts' events.
+   */
+  envId: string
+  query: LogQuery
+  /** Pages from "continue further back", in the order they were read. */
+  older: LogPage[]
 }
 
 export interface HealthDone {
@@ -45,10 +99,11 @@ const WorkbenchContext = createContext<WorkbenchValue | null>(null)
  *
  * These were all `useState` inside their screens, so walking between the
  * Schemas and Health tabs threw them away: the selected schema reverted to
- * nothing, the issues panel closed itself, and a deliberately collapsed chart
- * drawer sprang back open. None of them is a property of a route — they are
- * how you have arranged your workspace — so they live above the router and
- * persist until you change them.
+ * nothing, the issues panel closed itself, a deliberately collapsed chart
+ * drawer sprang back open, and a log search you had built up filter by filter
+ * was gone the moment you looked something up elsewhere. None of them is a
+ * property of a route — they are how you have arranged your workspace — so
+ * they live above the router and persist until you change them.
  *
  * Not persisted to disk: these are meaningful for a session, and restoring a
  * week-old arrangement on launch would be noise.
@@ -70,6 +125,21 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
   )
   const [healthDone, setHealthDone] = useState<HealthDone | null>(null)
   const [healthHideDone, setHealthHideDone] = useState(false)
+  const [logFilters, setLogFilters] = useState<LogFilters>(defaultLogFilters)
+  const [logRun, setLogRun] = useState<LogRun | null>(null)
+
+  const startLogRun = useCallback((envId: string, query: LogQuery) => {
+    setLogRun({ envId, query, older: [] })
+  }, [])
+
+  const appendLogPage = useCallback((page: LogPage) => {
+    setLogRun((prev) => (prev ? { ...prev, older: [...prev.older, page] } : prev))
+  }, [])
+
+  const clearLogSearch = useCallback(() => {
+    setLogFilters(defaultLogFilters)
+    setLogRun(null)
+  }, [])
 
   const toggleHealthDone = useCallback((reportAt: number, name: string) => {
     setHealthDone((prev) => {
@@ -98,6 +168,12 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       toggleHealthDone,
       healthHideDone,
       setHealthHideDone,
+      logFilters,
+      setLogFilters,
+      logRun,
+      startLogRun,
+      appendLogPage,
+      clearLogSearch,
     }),
     [
       selected,
@@ -109,6 +185,11 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       healthDone,
       toggleHealthDone,
       healthHideDone,
+      logFilters,
+      logRun,
+      startLogRun,
+      appendLogPage,
+      clearLogSearch,
     ],
   )
 

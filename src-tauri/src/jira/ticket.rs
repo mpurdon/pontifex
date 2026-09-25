@@ -360,9 +360,9 @@ fn publisher_block(context: &TicketContext, level: &str, out: &mut String) {
 fn finding_detail(issue: &Issue, out: &mut String) {
     if let Some(impact) = &issue.impact {
         for (heading, files) in [
-            ("h3. Consumers that read this field\n", &impact.readers),
+            ("h4. Consumers that read this field\n", &impact.readers),
             (
-                "h3. Consumers that pass its parent along\n",
+                "h4. Consumers that pass its parent along\n",
                 &impact.indirect,
             ),
         ] {
@@ -386,7 +386,7 @@ fn finding_detail(issue: &Issue, out: &mut String) {
     }
 
     if let Some(example) = &issue.example {
-        out.push_str("h3. Example value\n");
+        out.push_str("h4. Example value\n");
         out.push_str(&format!(
             "{{code}}\n{}\n{{code}}\n\n",
             render_example(example)
@@ -394,7 +394,7 @@ fn finding_detail(issue: &Issue, out: &mut String) {
     }
 
     if let Some(message) = &issue.message {
-        out.push_str("h3. Validator\n");
+        out.push_str("h4. Validator\n");
         out.push_str(&format!("{{quote}}{}{{quote}}\n\n", message));
     }
 }
@@ -409,6 +409,11 @@ fn footer(findings: &[Issue]) -> &'static str {
 }
 
 /// The ticket body, in Jira wiki markup.
+///
+/// Headings start at `h4` for a single finding and `h3` for a roll-up, which
+/// looks low until you see one rendered: Jira draws the body under its own
+/// "Description" label, and an `h3` there is the same weight as the field
+/// name above it, so the first section read as a second page title.
 ///
 /// One finding or several. A ticket about several says the shared part once —
 /// who publishes this event type, which schema, which sample — and then each
@@ -433,21 +438,21 @@ fn single_description(issue: &Issue, context: &TicketContext) -> String {
         context.environment,
     ));
 
-    out.push_str("h3. What is wrong\n");
+    out.push_str("h4. What is wrong\n");
     out.push_str(&format!("{}\n\n", plain(&issue.summary)));
 
     out.push_str(if issue.kind == IssueKind::Concern {
-        "h3. Details\n"
+        "h4. Details\n"
     } else {
-        "h3. What to do\n"
+        "h4. What to do\n"
     });
     out.push_str(&format!("{}\n\n", plain(&issue.action)));
 
-    out.push_str("h3. Evidence\n");
+    out.push_str("h4. Evidence\n");
     finding_evidence(issue, context, &mut out);
     where_found(context, issue.kind == IssueKind::Unregistered, &mut out);
 
-    publisher_block(context, "h3", &mut out);
+    publisher_block(context, "h4", &mut out);
     finding_detail(issue, &mut out);
     out.push_str(footer(std::slice::from_ref(issue)));
     out
@@ -475,7 +480,7 @@ fn rollup_description(findings: &[Issue], context: &TicketContext) -> String {
 
     // Numbered, in the order the panel ranked them, so the list doubles as a
     // table of contents for the sections below.
-    out.push_str("h2. What is wrong\n");
+    out.push_str("h3. What is wrong\n");
     for issue in findings {
         out.push_str(&format!(
             "# {}{}\n",
@@ -494,30 +499,30 @@ fn rollup_description(findings: &[Issue], context: &TicketContext) -> String {
     }
     out.push('\n');
 
-    out.push_str("h2. Where this was found\n");
+    out.push_str("h3. Where this was found\n");
     where_found(
         context,
         findings.iter().any(|i| i.kind == IssueKind::Unregistered),
         &mut out,
     );
-    publisher_block(context, "h2", &mut out);
+    publisher_block(context, "h3", &mut out);
 
     // Each finding in full, so this ticket says everything the eight separate
     // ones would have said.
     for (position, issue) in findings.iter().enumerate() {
         out.push_str(&format!(
-            "h2. {} of {}: {}\n\n",
+            "h3. {} of {}: {}\n\n",
             position + 1,
             findings.len(),
             plain(&issue.summary),
         ));
         out.push_str(if issue.kind == IssueKind::Concern {
-            "h3. Details\n"
+            "h4. Details\n"
         } else {
-            "h3. What to do\n"
+            "h4. What to do\n"
         });
         out.push_str(&format!("{}\n\n", plain(&issue.action)));
-        out.push_str("h3. Evidence\n");
+        out.push_str("h4. Evidence\n");
         finding_evidence(issue, context, &mut out);
         out.push('\n');
         finding_detail(issue, &mut out);
@@ -787,7 +792,7 @@ mod tests {
             "{body}"
         );
         assert!(
-            body.contains("h3. Consumers that read this field"),
+            body.contains("h4. Consumers that read this field"),
             "{body}"
         );
         assert!(
@@ -808,7 +813,7 @@ mod tests {
             body.contains("None of the 3 consumer file(s) found reads this field"),
             "{body}"
         );
-        assert!(!body.contains("h3. Consumers"), "{body}");
+        assert!(!body.contains("h4. Consumers"), "{body}");
     }
 
     /// A second, different finding about the same event type.
@@ -837,11 +842,11 @@ mod tests {
         let body = render_description(&[issue(), blank_field()], &context());
 
         // The list up top, then a section per finding.
-        assert!(body.contains("h2. What is wrong"), "{body}");
+        assert!(body.contains("h3. What is wrong"), "{body}");
         assert!(body.contains("# callAttemptCount is declared integer"), "{body}");
         assert!(body.contains("# clientId is required but blank"), "{body}");
-        assert!(body.contains("h2. 1 of 2:"), "{body}");
-        assert!(body.contains("h2. 2 of 2:"), "{body}");
+        assert!(body.contains("h3. 1 of 2:"), "{body}");
+        assert!(body.contains("h3. 2 of 2:"), "{body}");
 
         // Everything the two separate tickets would have said about each.
         assert!(body.contains("Fix the producer, or redeclare"), "{body}");

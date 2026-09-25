@@ -261,7 +261,7 @@ fn check_openapi_30(document: &Value, findings: &mut Vec<Finding>) {
         findings,
         Severity::Error,
         &numeric_exclusives,
-        None,
+        Some(Fix::Openapi30),
         "`exclusiveMinimum`/`exclusiveMaximum` are booleans in OpenAPI 3.0, so the \
          registry refuses a number here — and Ajv refuses the boolean. No spelling \
          satisfies both; use `minimum`/`maximum`.",

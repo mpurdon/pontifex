@@ -4,5 +4,6 @@ pub mod infer;
 pub mod model;
 pub mod openapi;
 pub mod repair;
+pub mod shape;
 pub mod simplify;
 pub mod validate;

@@ -506,7 +506,7 @@ regex_format!(
 /// the closest thing available: like JS and unlike the plain `regex` crate it
 /// supports lookaround and backreferences, so patterns the bus accepts are not
 /// rejected here for being expressible.
-fn is_regex(s: &str) -> bool {
+pub(crate) fn is_regex(s: &str) -> bool {
     static Z_ANCHOR: LazyLock<Regex> = LazyLock::new(|| compiled(r"[^\\]\\Z"));
     if Z_ANCHOR.is_match(s).unwrap_or(false) {
         return false;

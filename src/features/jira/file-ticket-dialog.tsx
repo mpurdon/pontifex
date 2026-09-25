@@ -24,8 +24,10 @@ import {
   ModalDescription,
   ModalTitle,
   Note,
+  OpenLink,
   Segmented,
   Select,
+  SelectMenu,
   Spinner,
   cn,
 } from '@/components/ui'
@@ -179,10 +181,44 @@ export function FileTicketDialog({
     staleTime: 5 * 60_000,
   })
 
+  /**
+   * Priority sits with Project and Type rather than among the project's
+   * demands: it is offered by most projects and required by almost none, and
+   * a ticket filed without one lands as "Unassigned" at the bottom of a
+   * backlog. It is only asked about when the project's create screen has it —
+   * sending one to a project that does not is a rejected create.
+   */
+  const offered = required.data ?? []
+  // Split on what Jira said, not on the field's name: the backend decides
+  // which fields are worth offering, and naming `priority` here too would
+  // mean the next one had to be added in two places that can disagree.
+  const optional = offered.filter((field) => !field.required)
+  const demanded = offered.filter((field) => field.required)
+  const priority = optional.find((field) => field.fieldId === 'priority')
+
+  // High unless this project has been answered otherwise before: a schema the
+  // bus is rejecting is not a someday ticket, and whoever files it can still
+  // say so here.
+  useEffect(() => {
+    if (!priority) return
+    const high = priority.allowedValues.find((v) => v.label.toLowerCase() === 'high')
+    if (!high) return
+    setFields((held) =>
+      held.priority === undefined ? { ...held, priority: { id: high.id } } : held,
+    )
+  }, [priority])
+
+  // A priority held from a type whose screen had one — changing the type
+  // keeps `fields` — is neither sent nor remembered once this type's screen is
+  // known to lack it. Filing also checks, for a priority saved as a default.
+  const { priority: heldPriority, ...withoutPriority } = fields
+  const sendable =
+    required.data && !priority && heldPriority !== undefined ? withoutPriority : fields
+
   // Blocking only on the ones Jira will not fill itself: a defaulted field is
   // worth offering, but refusing to file without it would be wrong more often
   // than right.
-  const unanswered = (required.data ?? []).filter(
+  const unanswered = demanded.filter(
     (field) => !field.hasDefault && fields[field.fieldId] === undefined,
   )
 
@@ -190,8 +226,8 @@ export function FileTicketDialog({
     mutationFn: async ({ commentOn }) => {
       // Saved before the write, so a rejected create does not also lose the
       // answers that took a trip to Jira's field metadata to discover.
-      if (remember && Object.keys(fields).length > 0) {
-        await ipc.setJiraFieldDefaults(projectKey, fields)
+      if (remember && Object.keys(sendable).length > 0) {
+        await ipc.setJiraFieldDefaults(projectKey, sendable)
       }
 
       const result = await ipc.fileJiraTicket({
@@ -201,7 +237,7 @@ export function FileTicketDialog({
         description,
         projectKey,
         issueType,
-        fields,
+        fields: sendable,
         commentOn,
       })
       // A bulk run reports failures per row; a single filing has nowhere to put
@@ -281,14 +317,9 @@ export function FileTicketDialog({
             <Note tone="warn">
               <span>
                 Already filed as{' '}
-                <a
-                  href={existing.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-mono underline"
-                >
+                <OpenLink url={existing.url} className="font-mono underline">
                   {existing.key}
-                </a>
+                </OpenLink>
                 {existing.status && ` (${existing.status})`}. Comment on it instead of
                 opening a second ticket.
               </span>
@@ -333,6 +364,21 @@ export function FileTicketDialog({
                 onChange={setIssueType}
               />
             </Field>
+            {priority && priority.allowedValues.length > 0 && (
+              <Field label={priority.name} className="w-36 min-w-0">
+                <SelectMenu
+                  value={valueId(fields.priority)}
+                  onChange={(id) =>
+                    setFields((held) => ({ ...held, priority: shapeValue(priority, id) }))
+                  }
+                  placeholder="choose…"
+                  options={priority.allowedValues.map((allowed) => ({
+                    value: allowed.id,
+                    label: allowed.label,
+                  }))}
+                />
+              </Field>
+            )}
           </div>
 
           {/* Discovery failing is worth saying out loud: without it the dialog
@@ -350,13 +396,13 @@ export function FileTicketDialog({
 
           {/* Only what this project actually demands — an empty section here
               is the normal case. */}
-          {required.data && required.data.length > 0 && (
+          {demanded.length > 0 && (
             <div className="flex flex-col gap-2 rounded-md border border-edge bg-surface-0 p-2">
               <p className="text-[10px] text-ink-faint">
-                {projectKey} requires {required.data.length === 1 ? 'this' : 'these'} before
-                it will accept a ticket.
+                {projectKey} requires {demanded.length === 1 ? 'this' : 'these'} before it
+                will accept a ticket.
               </p>
-              {required.data.map((field) => (
+              {demanded.map((field) => (
                 <Field
                   key={field.fieldId}
                   label={field.name}
@@ -500,10 +546,8 @@ export function FileTicketDialog({
  */
 export function TicketChip({ ticket }: { ticket: EventTicket }) {
   return (
-    <a
-      href={ticket.url}
-      target="_blank"
-      rel="noreferrer"
+    <OpenLink
+      url={ticket.url}
       title={[
         ticket.summary,
         ticket.updated ? `moved ${formatAge(Date.now() - ticket.updated)} ago` : null,
@@ -520,25 +564,19 @@ export function TicketChip({ ticket }: { ticket: EventTicket }) {
         <span className="font-normal opacity-80">{ticket.status}</span>
         <ExternalLink className="size-2.5" />
       </Badge>
-    </a>
+    </OpenLink>
   )
 }
 
 /** A ticket that was just filed, shown where the button used to be. */
 export function FiledChip({ ticket }: { ticket: FiledTicket }) {
   return (
-    <a
-      href={ticket.url}
-      target="_blank"
-      rel="noreferrer"
-      title={ticket.summary ?? ticket.key}
-      className="shrink-0"
-    >
+    <OpenLink url={ticket.url} title={ticket.summary ?? ticket.key} className="shrink-0">
       <Badge tone="ok" className="hover:bg-ok/25">
         <CheckCircle2 className="size-2.5" />
         {ticket.key}
         <ExternalLink className="size-2.5" />
       </Badge>
-    </a>
+    </OpenLink>
   )
 }

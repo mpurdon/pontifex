@@ -721,12 +721,30 @@ describe('non-empty', () => {
   it('writes the smallest bound that refuses empty, and leaves a stricter one', () => {
     expect(nonEmptyPatch('string', {}, true)).toEqual({ minLength: 1 })
     expect(nonEmptyPatch('string', { minLength: 4 }, true)).toEqual({})
-    expect(nonEmptyPatch('integer', {}, true)).toEqual({ exclusiveMinimum: 0 })
+    // `minimum: 1`, not `exclusiveMinimum: 0`: the registry refuses a numeric
+    // exclusive bound and Ajv refuses the boolean one, so the toggle used to
+    // write a document that could not be saved.
+    expect(nonEmptyPatch('integer', {}, true)).toEqual({ minimum: 1 })
+    expect(nonEmptyPatch('integer', { minimum: 5 }, true)).toEqual({})
+  })
+
+  it('has no offer for a float, because no spelling of it survives the registry', () => {
+    // "Greater than zero" for a float needs the exclusive bound OpenAPI 3.0
+    // will not take as a number. An integer can say it as `minimum: 1`.
+    expect(nonEmptyPatch('number', {}, true)).toBeNull()
+    // Turning it off still works, so a float carrying a bound written by the
+    // old toggle is not stuck with a keyword that cannot be saved.
+    expect(nonEmptyPatch('number', { exclusiveMinimum: 0 }, false)).toEqual({
+      exclusiveMinimum: undefined,
+      minimum: undefined,
+    })
   })
 
   it('removes the lower bound when empty is allowed again', () => {
     expect(nonEmptyPatch('string', { minLength: 4 }, false)).toEqual({ minLength: undefined })
-    expect(nonEmptyPatch('number', { minimum: 1 }, false)).toEqual({
+    // The exclusive spelling goes too, so a draft written by the old toggle
+    // is cleared by unticking it.
+    expect(nonEmptyPatch('integer', { minimum: 1 }, false)).toEqual({
       exclusiveMinimum: undefined,
       minimum: undefined,
     })

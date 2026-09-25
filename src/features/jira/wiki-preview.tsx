@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { parseWiki, type Block, type Inline } from '@/lib/jira-wiki'
-import { cn } from '@/components/ui'
+import { OpenLink, cn } from '@/components/ui'
 
 /**
  * The body as Jira will draw it.
@@ -111,15 +111,9 @@ function Spans({ spans }: { spans: Inline[] }) {
             )
           case 'link':
             return (
-              <a
-                key={i}
-                href={span.href}
-                target="_blank"
-                rel="noreferrer"
-                className="text-accent underline"
-              >
+              <OpenLink key={i} url={span.href} className="text-accent underline">
                 {span.text}
-              </a>
+              </OpenLink>
             )
           default:
             return <span key={i}>{span.text}</span>

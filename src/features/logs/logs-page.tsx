@@ -2,8 +2,11 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, RefreshCw, ScrollText, SlidersHorizontal } from 'lucide-react'
 import * as ipc from '@/lib/ipc'
-import type { IpcError, LogEvent, LogPage, WatchCondition } from '@/lib/types'
+import type { IpcError, LogEvent } from '@/lib/types'
 import { ConditionEditor } from '@/features/watch/conditions'
+import { useSchemaIndex } from '@/features/schemas/schema-links'
+import { SchemaRowActions } from '@/features/schemas/schema-row-actions'
+import { useWorkbench, type LogFilters } from '@/features/schemas/workbench-context'
 import {
   Badge,
   Button,
@@ -34,25 +37,37 @@ export function LogsPage() {
   const { envId, activeEnvironment, timeZone } = useSettings()
   const credentials = useLoginForEnvironment(activeEnvironment)
 
-  const [logGroup, setLogGroup] = useState('')
-  const [minutes, setMinutes] = useState(60)
-  const [source, setSource] = useState('')
-  const [detailType, setDetailType] = useState('')
-  const [rawPattern, setRawPattern] = useState('')
-  const [useRaw, setUseRaw] = useState(false)
-  // Payload conditions, the same grammar a watch uses, compiled into the
-  // pattern with the source and detail type when the search runs.
-  const [advanced, setAdvanced] = useState(false)
-  const [conditions, setConditions] = useState<WatchCondition[]>([])
-  const [compiledPattern, setCompiledPattern] = useState<string | null>(null)
+  /**
+   * The filter bar and the search it has run live above the router: a search
+   * is work, and opening a schema or a watch to check something used to throw
+   * it away. Only Clear — or quitting the app — puts the bar back to defaults.
+   */
+  const {
+    logFilters: filters,
+    setLogFilters,
+    logRun,
+    startLogRun,
+    appendLogPage,
+    clearLogSearch,
+  } = useWorkbench()
+  const {
+    logGroup,
+    minutes,
+    source,
+    detailType,
+    rawPattern,
+    useRaw,
+    // Payload conditions, the same grammar a watch uses, compiled into the
+    // pattern with the source and detail type when the search runs.
+    advanced,
+    conditions,
+  } = filters
+  const set = <K extends keyof LogFilters>(key: K, value: LogFilters[K]) =>
+    setLogFilters((prev) => ({ ...prev, [key]: value }))
+
   const [compileError, setCompileError] = useState<IpcError | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
-  /**
-   * Bumped on Search to re-run the query with the current filters. Without
-   * this the query would re-fire on every keystroke in the filter inputs.
-   */
-  const [runToken, setRunToken] = useState(0)
 
   const groups = useQuery({
     queryKey: ['logs', envId, 'groups'],
@@ -61,48 +76,47 @@ export function LogsPage() {
     retry: false,
   })
 
+  // Whether the chosen group is one this environment has. The filters outlive
+  // an environment switch, so the group left from the last one — a
+  // `dev-global-events` against the prd account — would otherwise be searched.
+  // A list that failed to load cannot say, so the typed group is trusted then.
+  const groupKnown =
+    !!logGroup && (groups.isError || !!groups.data?.some((g) => g.name === logGroup))
+
   // Default to the environment's own global-events group.
   useEffect(() => {
-    if (!logGroup && groups.data?.length) {
+    if (!groupKnown && groups.data?.length) {
       const preferred =
         groups.data.find((g) => g.configured && g.name.includes('global-events')) ??
         groups.data.find((g) => g.configured) ??
         groups.data[0]
-      setLogGroup(preferred.name)
+      set('logGroup', preferred.name)
     }
-  }, [groups.data, logGroup])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups.data, groupKnown])
 
   const activeConditions = conditions.filter((c) => c.path.trim())
   const structured = !useRaw && advanced && activeConditions.length > 0
-
-  const query = useMemo(
-    () => ({
-      logGroup,
-      startTime: Date.now() - minutes * 60_000,
-      // A compiled pattern already carries the source and detail type.
-      source: useRaw || structured ? undefined : source || undefined,
-      detailType: useRaw || structured ? undefined : detailType || undefined,
-      filterPattern: useRaw ? rawPattern || undefined : structured ? (compiledPattern ?? undefined) : undefined,
-      limit: 300,
-    }),
-    // `runToken` is intentionally a dependency: it is what makes Search
-    // re-evaluate the (otherwise stable) filter inputs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [logGroup, minutes, runToken],
-  )
 
   /**
    * Search. With conditions, the pattern is compiled first by the same code
    * that compiles a watch, so the two screens cannot disagree about the
    * grammar, and the query only runs once the pattern is in hand.
+   *
+   * The query is built here rather than derived from the filters, so editing a
+   * field does not re-fire the search on every keystroke — and so the query
+   * that is running keeps its identity, and its cached results, while you are
+   * off on another screen.
    */
   const search = async () => {
+    if (!envId || !groupKnown) return
     setCompileError(null)
+    let pattern = useRaw ? rawPattern || undefined : undefined
     if (structured) {
       try {
         const compiled = await ipc.compileWatchPattern({
           id: '',
-          envId: envId ?? '',
+          envId,
           label: '',
           enabled: true,
           logGroup,
@@ -113,29 +127,54 @@ export function LogsPage() {
           notify: false,
           color: null,
         })
-        setCompiledPattern(compiled.pattern)
+        set('compiledPattern', compiled.pattern)
+        pattern = compiled.pattern ?? undefined
       } catch (e) {
         setCompileError(ipc.asIpcError(e))
         return
       }
     }
-    setRunToken((t) => t + 1)
+    startLogRun(envId, {
+      logGroup,
+      startTime: Date.now() - minutes * 60_000,
+      // A compiled pattern already carries the source and detail type.
+      source: useRaw || structured ? undefined : source || undefined,
+      detailType: useRaw || structured ? undefined : detailType || undefined,
+      filterPattern: pattern,
+      limit: 300,
+    })
   }
 
+  // A run belongs to the environment it was made in; after a switch the
+  // effect below starts a fresh one rather than showing another account's
+  // events under this account's name.
+  const run = logRun?.envId === envId ? logRun : null
+
+  /**
+   * Nothing to show and nothing running: search once the log group is known,
+   * so arriving on the screen — or switching environment — opens on events
+   * instead of an empty panel waiting for a click.
+   */
+  useEffect(() => {
+    if (run || !envId || !groupKnown) return
+    void search()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run, envId, groupKnown])
+
+  const query = run?.query
   const logs = useQuery({
     queryKey: ['logs', envId, 'events', query],
-    queryFn: () => ipc.queryLogs(query, envId),
-    enabled: !!envId && !!logGroup,
+    queryFn: () => ipc.queryLogs(query!, envId),
+    enabled: !!envId && !!query,
     retry: false,
     refetchInterval: autoRefresh ? 10_000 : false,
   })
 
-  // Older pages, fetched on demand from where the last scan stopped. Reset
-  // whenever the search itself changes.
-  const [older, setOlder] = useState<LogPage[]>([])
+  // Older pages, fetched on demand from where the last scan stopped. They
+  // belong to the run, so a new search drops them with it.
+  const older = run?.older ?? []
   const [continuing, setContinuing] = useState<IpcError | 'busy' | null>(null)
   useEffect(() => {
-    setOlder([])
     setContinuing(null)
   }, [query])
   const last = older.at(-1) ?? logs.data
@@ -144,16 +183,19 @@ export function LogsPage() {
     [logs.data, older],
   )
   const searchMore = async () => {
-    if (!last) return
+    if (!last || !query) return
     setContinuing('busy')
     try {
       const page = await ipc.queryLogs({ ...query, endTime: last.searchedFrom }, envId)
-      setOlder((prev) => [...prev, page])
+      appendLogPage(page)
       setContinuing(null)
     } catch (e) {
       setContinuing(ipc.asIpcError(e))
     }
   }
+
+  /** So a row can offer the schema for its event type, or offer to draft one. */
+  const schemaIndex = useSchemaIndex(envId)
 
   const toggle = (index: number) => {
     setExpanded((prev) => {
@@ -166,11 +208,19 @@ export function LogsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <Toolbar>
+      {/* One line. Wrapped, the filters and the Search button they belong to
+          ended up on different rows, which reads as two unrelated bars — and
+          auto-refresh and the event count moved with them.
+
+          The fields give way rather than the bar: every control keeps its
+          size except the three text fields, which shrink to a floor wide
+          enough to still read a source name. Narrower than that and the bar
+          scrolls. */}
+      <Toolbar className="flex-nowrap overflow-x-auto">
         <Select
           value={logGroup}
-          onChange={(e) => setLogGroup(e.target.value)}
-          className="w-72"
+          onChange={(e) => set('logGroup', e.target.value)}
+          className="w-72 min-w-32"
         >
           {groups.data?.map((group) => (
             <option key={group.name} value={group.name}>
@@ -182,7 +232,8 @@ export function LogsPage() {
 
         <Select
           value={minutes}
-          onChange={(e) => setMinutes(Number(e.target.value))}
+          onChange={(e) => set('minutes', Number(e.target.value))}
+          className="shrink-0"
         >
           {RANGES.map((range) => (
             <option key={range.minutes} value={range.minutes}>
@@ -194,27 +245,27 @@ export function LogsPage() {
         {useRaw ? (
           <Input
             value={rawPattern}
-            onChange={(e) => setRawPattern(e.target.value)}
+            onChange={(e) => set('rawPattern', e.target.value)}
             placeholder={'{ $.detail.veteranId = "123" }'}
-            className="w-96 font-mono"
+            className="w-96 min-w-40 font-mono"
             spellCheck={false}
           />
         ) : (
           <>
             <Input
               value={source}
-              onChange={(e) => setSource(e.target.value)}
+              onChange={(e) => set('source', e.target.value)}
               placeholder="source (orders*)"
               title="Exact match, or use * as a leading/trailing wildcard"
-              className="w-44"
+              className="w-44 min-w-28"
               spellCheck={false}
             />
             <Input
               value={detailType}
-              onChange={(e) => setDetailType(e.target.value)}
+              onChange={(e) => set('detailType', e.target.value)}
               placeholder="detail-type (*assigned)"
               title="Exact match, or use * as a leading/trailing wildcard"
-              className="w-52"
+              className="w-52 min-w-28"
               spellCheck={false}
             />
           </>
@@ -222,17 +273,18 @@ export function LogsPage() {
 
         <Checkbox
           checked={useRaw}
-          onChange={(e) => setUseRaw(e.target.checked)}
+          onChange={(e) => set('useRaw', e.target.checked)}
           label="raw pattern"
+          className="shrink-0"
         />
 
         {!useRaw && (
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setAdvanced((a) => !a)}
+            onClick={() => set('advanced', !advanced)}
             title="Add conditions on the event payload"
-            className={cn(advanced && 'bg-surface-3 text-ink')}
+            className={cn('shrink-0', advanced && 'bg-surface-3 text-ink')}
           >
             <SlidersHorizontal className="size-3" />
             Advanced
@@ -240,11 +292,23 @@ export function LogsPage() {
           </Button>
         )}
 
-        <Button variant="primary" onClick={search}>
+        <Button variant="primary" onClick={() => void search()} className="shrink-0">
           Search
         </Button>
 
-        <div className="ml-auto flex items-center gap-2">
+        {/* The one thing that throws a search away, since nothing else does
+            any more. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={clearLogSearch}
+          title="Put the filters back to their defaults"
+          className="shrink-0"
+        >
+          Clear
+        </Button>
+
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <TimeZoneToggle />
           <Checkbox
             checked={autoRefresh}
@@ -275,7 +339,7 @@ export function LogsPage() {
           <div className="max-w-2xl">
             <ConditionEditor
               conditions={conditions}
-              onChange={setConditions}
+              onChange={(next) => set('conditions', next)}
               envId={envId}
               source={source}
               detailType={detailType}
@@ -365,6 +429,11 @@ export function LogsPage() {
                 <LogRow
                   key={`${event.timestamp}-${index}`}
                   event={event}
+                  // The group the rows were searched in, not the one the bar
+                  // has been changed to since: a draft scans it for this event.
+                  logGroup={query?.logGroup ?? logGroup}
+                  schemaName={schemaIndex.nameFor(event.source, event.detailType)}
+                  schemasKnown={schemaIndex.known}
                   expanded={expanded.has(index)}
                   onToggle={() => toggle(index)}
                 />
@@ -384,10 +453,19 @@ function eventText(event: LogEvent): string {
 
 function LogRow({
   event,
+  logGroup,
+  schemaName,
+  schemasKnown,
   expanded,
   onToggle,
 }: {
   event: LogEvent
+  /** The group this row was read from, for drafting from the same place. */
+  logGroup: string
+  /** The registered schema for this event type, when one exists. */
+  schemaName: string | null
+  /** False while the registry list is loading, so neither action is offered. */
+  schemasKnown: boolean
   expanded: boolean
   onToggle: () => void
 }) {
@@ -421,7 +499,15 @@ function LogRow({
         <td className="w-full max-w-0 truncate px-2 py-1 font-mono text-ink-faint">
           {event.eventId ?? '—'}
         </td>
-        <td className="pr-1 text-right">
+        <td className="whitespace-nowrap pr-1 text-right">
+          <SchemaRowActions
+            source={event.source}
+            detailType={event.detailType}
+            logGroup={logGroup}
+            timestamp={event.timestamp}
+            schemaName={schemaName}
+            known={schemasKnown}
+          />
           <CopyButton text={eventText(event)} title="Copy event JSON" />
         </td>
       </tr>

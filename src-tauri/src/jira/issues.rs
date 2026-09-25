@@ -213,6 +213,7 @@ fn parse_jira_time(text: &str) -> Option<i64> {
 }
 
 pub async fn create(client: &JiraClient, draft: &TicketDraft) -> Result<FiledTicket> {
+    let draft = &off_screen_fields_dropped(client, draft).await;
     let created = client.post("/issue", &ticket::to_fields(draft)).await?;
     let key = created
         .get("key")
@@ -225,6 +226,36 @@ pub async fn create(client: &JiraClient, draft: &TicketDraft) -> Result<FiledTic
         status: None,
         summary: Some(draft.summary.clone()),
     })
+}
+
+/// The draft without an offered field its issue type's create screen lacks.
+///
+/// A priority answered for one issue type, or saved as the project's default,
+/// is sent again for a type whose screen has no Priority — and Jira refuses
+/// the whole create over it. Only checked when the draft carries one, so
+/// most creates cost no extra call; if the screen cannot be read, the draft
+/// goes as it is and Jira's own answer stands.
+async fn off_screen_fields_dropped(client: &JiraClient, draft: &TicketDraft) -> TicketDraft {
+    let mut draft = draft.clone();
+    if !draft
+        .fields
+        .keys()
+        .any(|id| OFFERED_FIELDS.contains(&id.as_str()))
+    {
+        return draft;
+    }
+    if let Ok(screen) = required_fields(client, &draft.project_key, &draft.issue_type).await {
+        drop_off_screen(&mut draft.fields, &screen);
+    }
+    draft
+}
+
+/// Drop the offered fields `screen` does not list. Required ones are left for
+/// Jira to judge: those are what the project said it needs.
+fn drop_off_screen(fields: &mut std::collections::BTreeMap<String, Value>, screen: &[RequiredField]) {
+    fields.retain(|id, _| {
+        !OFFERED_FIELDS.contains(&id.as_str()) || screen.iter().any(|f| &f.field_id == id)
+    });
 }
 
 /// Add a comment saying the problem is still happening, with today's numbers.
@@ -383,8 +414,19 @@ pub struct RequiredField {
     /// a REST create: a select with a configured default can still be demanded
     /// on the API. Shown, but never blocking.
     pub has_default: bool,
+    /// Whether the project demands it, as opposed to merely offering it.
+    pub required: bool,
     pub allowed_values: Vec<AllowedValue>,
 }
+
+/// Offered rather than demanded, and asked about anyway.
+///
+/// Priority is the field a producer team triages by, and a ticket filed
+/// without one lands as "Unassigned" at the bottom of a backlog. It is
+/// almost never required, so asking Jira only about required fields never
+/// surfaced it — and sending one unasked would be rejected by any project
+/// that does not have it on the create screen.
+const OFFERED_FIELDS: &[&str] = &["priority"];
 
 /// Fields pontifex already fills, or Jira fills itself.
 const HANDLED_FIELDS: &[&str] = &[
@@ -420,13 +462,17 @@ fn page_items<'a>(page: &'a Value, name: &str) -> &'a [Value] {
 pub fn parse_required_fields(page: &Value) -> Vec<RequiredField> {
     page_items(page, "fields")
                 .iter()
-                .filter(|field| field.get("required").and_then(Value::as_bool) == Some(true))
                 .filter_map(|field| {
                     let field_id = field.get("fieldId")?.as_str()?.to_string();
                     if HANDLED_FIELDS.contains(&field_id.as_str()) {
                         return None;
                     }
+                    let required = field.get("required").and_then(Value::as_bool) == Some(true);
+                    if !required && !OFFERED_FIELDS.contains(&field_id.as_str()) {
+                        return None;
+                    }
                     Some(RequiredField {
+                        required,
                         name: field
                             .get("name")
                             .and_then(Value::as_str)
@@ -633,12 +679,34 @@ mod tests {
 
         let fields = parse_required_fields(&page);
         assert_eq!(fields.len(), 1);
+        assert!(fields[0].required);
         assert_eq!(fields[0].field_id, "customfield_10798");
         assert_eq!(fields[0].name, "Discovery Environment");
         assert_eq!(fields[0].field_type, "option");
         assert_eq!(fields[0].allowed_values.len(), 2);
         assert_eq!(fields[0].allowed_values[0].label, "Production");
         assert_eq!(fields[0].allowed_values[0].id, "10500");
+    }
+
+    #[test]
+    fn a_priority_the_screen_lacks_is_not_sent() {
+        let mut fields: std::collections::BTreeMap<String, Value> = [
+            ("priority".to_string(), serde_json::json!({ "id": "2" })),
+            ("customfield_1".to_string(), serde_json::json!("prod")),
+        ]
+        .into();
+        // A screen with no Priority: it goes, the project's own demand stays.
+        drop_off_screen(&mut fields, &[]);
+        assert!(!fields.contains_key("priority"));
+        assert!(fields.contains_key("customfield_1"));
+
+        let mut fields: std::collections::BTreeMap<String, Value> =
+            [("priority".to_string(), serde_json::json!({ "id": "2" }))].into();
+        let screen = parse_required_fields(&serde_json::json!({
+            "fields": [{ "fieldId": "priority", "name": "Priority", "required": false }]
+        }));
+        drop_off_screen(&mut fields, &screen);
+        assert!(fields.contains_key("priority"));
     }
 
     #[test]
@@ -700,6 +768,40 @@ mod tests {
         assert_eq!(fields[0].items.as_deref(), Some("component"));
         // Components carry `name` where option fields carry `value`.
         assert_eq!(fields[0].allowed_values[0].label, "billing");
+    }
+
+    #[test]
+    fn offers_priority_even_though_no_project_demands_it() {
+        // A ticket filed without one lands as "Unassigned" at the bottom of a
+        // backlog, and priority is almost never a required field — so asking
+        // only about required fields never saw it.
+        let page = serde_json::json!({
+            "fields": [
+                {
+                    "fieldId": "priority",
+                    "name": "Priority",
+                    "required": false,
+                    "hasDefaultValue": true,
+                    "schema": { "type": "priority" },
+                    "allowedValues": [
+                        { "id": "1", "name": "Highest" },
+                        { "id": "2", "name": "High" },
+                        { "id": "3", "name": "Medium" }
+                    ]
+                },
+                // Still ignored: offered, not demanded, and not one we ask for.
+                {
+                    "fieldId": "customfield_999", "name": "Sprint", "required": false,
+                    "hasDefaultValue": false, "schema": { "type": "array" }
+                }
+            ]
+        });
+
+        let fields = parse_required_fields(&page);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].field_id, "priority");
+        assert!(!fields[0].required);
+        assert_eq!(fields[0].allowed_values[1].label, "High");
     }
 
     #[test]

@@ -47,6 +47,14 @@ describe('repairLabel', () => {
     )
   })
 
+  it('shows the pattern it would pin, because that is the claim', () => {
+    // "Constrain to the observed shape" is a button whose effect you cannot
+    // read, and therefore cannot disagree with before clicking.
+    expect(
+      repairLabel({ kind: 'constrainPattern', pattern: '^\\d{7}-[0-9a-f]{16}$' }),
+    ).toBe('Match ^\\d{7}-[0-9a-f]{16}$')
+  })
+
   it('labels the repairs that take no operands', () => {
     expect(repairLabel({ kind: 'dropRequired' })).toBe('Make optional')
     expect(repairLabel({ kind: 'requireNonEmpty' })).toBe('Require a value')

@@ -48,16 +48,32 @@ export function SchemasPage() {
   const credentials = useLoginForEnvironment(activeEnvironment)
   const { setDraft: setAiDraft } = useAiDraft()
 
-  // The health report links here with ?select=<schema>, so a finding is one
-  // click from the schema that needs fixing. The selection itself lives above
-  // the router, so walking to another screen and back does not lose it.
+  // The health report and the logs screen link here with ?select=<schema>, so
+  // a finding is one click from the schema that needs fixing. The selection
+  // itself lives above the router, so walking to another screen and back does
+  // not lose it.
   const [searchParams, setSearchParams] = useSearchParams()
   const { selected, select: setSelected } = useWorkbench()
 
+  /**
+   * `?select=` is a one-shot command, so it is consumed the moment it is
+   * applied. Left in the URL it kept re-asserting itself: picking a different
+   * schema from the list changed the selection, which re-ran this effect,
+   * which put the linked schema straight back.
+   */
   useEffect(() => {
     const requested = searchParams.get('select')
-    if (requested && requested !== selected) setSelected(requested)
-  }, [searchParams, selected, setSelected])
+    if (!requested) return
+    setSelected(requested)
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('select')
+        return next
+      },
+      { replace: true },
+    )
+  }, [searchParams, setSearchParams, setSelected])
 
   /**
    * `?draft=source@detail-type` arrives from the health report's "on the bus

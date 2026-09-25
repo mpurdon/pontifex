@@ -22,6 +22,11 @@ export function repairLabel(repair: Repair): string {
       return 'Require a value'
     case 'declareField':
       return `Declare as ${repair.types.join(' | ')}`
+    // The pattern itself, not "Constrain to the observed shape": it is a
+    // claim about every future event, and a button whose effect you cannot
+    // read is one you cannot disagree with before clicking.
+    case 'constrainPattern':
+      return `Match ${repair.pattern}`
   }
 }
 

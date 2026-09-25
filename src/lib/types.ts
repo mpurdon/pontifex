@@ -151,6 +151,8 @@ export interface RequiredField {
    * Shown but never blocking — the claim is not always true of a REST create.
    */
   hasDefault: boolean
+  /** Whether the project demands it, as opposed to merely offering it. */
+  required: boolean
   allowedValues: AllowedValue[]
 }
 
@@ -595,6 +597,8 @@ export type Repair =
   | { kind: 'requireNonEmpty' }
   /** Declare a field that events send and the schema does not describe. */
   | { kind: 'declareField'; types: string[]; example?: unknown }
+  /** Pin a field to the shape its values have, in place of a check they fail. */
+  | { kind: 'constrainPattern'; pattern: string }
 
 /** What a model proposes for an issue the local planner cannot decide. */
 export interface RepairSuggestion {
@@ -1008,6 +1012,18 @@ export interface FileTicketRequest {
   fields?: Record<string, unknown>
   /** Comment on this existing ticket instead of creating a second one. */
   commentOn?: string
+}
+
+/** What the sampled events carry at one field's path. */
+export interface FieldSample {
+  /** The shape every sampled value shares, when they share one. */
+  pattern: string | null
+  /** The distinct values, in the order first seen. */
+  values: unknown[]
+  /** Events read. */
+  sampled: number
+  /** Whether the sampler stopped counting, making `values` a lower bound. */
+  capped: boolean
 }
 
 /** A ticket already filed about an event type, with where it stands. */

@@ -134,11 +134,11 @@ async fn fetch_schema(
 /// Every log group a scan should read, or just the one asked for.
 ///
 /// An environment normally carries two — `{stage}-global-events` and
-/// `{stage}-external-events` — because events reaching the bus over the bridge
-/// land in the second. Reading only the first made every report a statement
-/// about half the traffic: an external event type with no schema was invisible
-/// rather than listed as unregistered, so "0 missing" was not the claim it
-/// looked like.
+/// `{stage}-external-events`. The second holds the external bus's redacted
+/// copies (see [`Environment::is_redacted_copy`]), which are still worth
+/// reading to learn that a type flows: reading only the first made a type seen
+/// only there invisible rather than listed as unregistered. What an event
+/// *contains* comes from [`graded_log_groups`] instead.
 fn resolve_log_groups(env: &Environment, requested: Option<String>) -> Result<Vec<String>> {
     if let Some(one) = requested.filter(|g| !g.trim().is_empty()) {
         return Ok(vec![one]);
@@ -152,6 +152,29 @@ fn resolve_log_groups(env: &Environment, requested: Option<String>) -> Result<Ve
     if groups.is_empty() {
         return Err(Error::Invalid(format!(
             "Environment '{}' has no log groups configured",
+            env.label
+        )));
+    }
+    Ok(groups)
+}
+
+/// The log groups whose events say what producers actually sent — every
+/// group [`resolve_log_groups`] would read, less the external bus's redacted
+/// copies.
+///
+/// Anything that reads an event's fields goes through here: grading, the
+/// events behind a finding, a field's values, a drafted schema. A redacted
+/// group asked for by name is not honoured, since the full event it was
+/// copied from is in the bus's own group.
+fn graded_log_groups(env: &Environment, requested: Option<String>) -> Result<Vec<String>> {
+    let requested = requested.filter(|g| !Environment::is_redacted_copy(g));
+    let groups: Vec<String> = resolve_log_groups(env, requested)?
+        .into_iter()
+        .filter(|g| !Environment::is_redacted_copy(g))
+        .collect();
+    if groups.is_empty() {
+        return Err(Error::Invalid(format!(
+            "Environment '{}' has only the external bus's log group configured. Its events are redacted copies, so there is nothing to grade; add the bus's own log group.",
             env.label
         )));
     }
@@ -185,9 +208,9 @@ fn sanitized_bucket_index(keys: &[String]) -> BTreeMap<String, String> {
 ///  1. the name as registered,
 ///  2. the PascalCase detail type discovered schemas are registered under,
 ///  3. the name a source containing illegal characters was sanitized into.
-fn match_bucket(
+fn match_bucket<V>(
     identity: &EventIdentity,
-    buckets: &BTreeMap<String, Vec<Value>>,
+    buckets: &BTreeMap<String, V>,
     sanitized: &BTreeMap<String, String>,
 ) -> Option<String> {
     let exact = identity.schema_name();
@@ -270,10 +293,7 @@ async fn run_check(
     let type_name = detail_type_name(&document, request.type_name.as_deref())?;
 
     let (env, cfg) = state.env_config(env_id).await?;
-    // Every configured group, because a schema's events may arrive over the
-    // bridge rather than directly, and checking only the first reported an
-    // external event type as having no traffic at all.
-    let log_groups = resolve_log_groups(&env, request.log_group.clone())?;
+    let log_groups = graded_log_groups(&env, request.log_group.clone())?;
 
     let minutes = request.minutes.unwrap_or(60 * 24).max(1);
     let limit = request.limit.unwrap_or(200).clamp(1, 10_000);
@@ -578,8 +598,8 @@ pub struct RegistryReport {
     pub unregistered: Vec<UnregisteredEvent>,
     pub scanned_events: usize,
     pub minutes: i64,
-    /// Every log group this report read. More than one for an environment that
-    /// takes events over the bridge as well as directly.
+    /// Every log group this report read. Only those that are not the external
+    /// bus's redacted copies were graded; the rest only show what flows.
     pub log_groups: Vec<String>,
     pub registry: String,
     /// True when any time slice stopped early, so absence of traffic is not proof.
@@ -632,7 +652,23 @@ pub async fn registry_report(
     // The event cap is a ceiling on the whole report, so it divides. The time
     // budget does not: the groups are scanned concurrently below, so each can
     // have the full deadline without the report taking any longer.
-    let per_group_events = (max_events / log_groups.len()).max(50);
+    //
+    // Not evenly, though: the external bus holds a copy of every bus event,
+    // so its scan only finds the few types the bus's own group did not show.
+    // A tenth of the cap does that; an even split halved the graded sample.
+    let redacted_groups = log_groups
+        .iter()
+        .filter(|g| Environment::is_redacted_copy(g))
+        .count();
+    let redacted_share = if redacted_groups > 0 { (max_events / 10).max(50) } else { 0 };
+    let graded_groups = (log_groups.len() - redacted_groups).max(1);
+    let events_for = |group: &str| {
+        if Environment::is_redacted_copy(group) {
+            (redacted_share / redacted_groups).max(50)
+        } else {
+            (max_events.saturating_sub(redacted_share) / graded_groups).max(50)
+        }
+    };
     let report_timer = crate::logging::Timed::start(
         cat::EVENTS,
         format!(
@@ -661,10 +697,13 @@ pub async fn registry_report(
 
     let mut buckets: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     // Cacheable events per (log group, type): the cache is keyed by group, so
-    // events from the bridge and events from the bus stay distinguishable.
+    // the external bus's copies stay apart from the events graded.
     let mut cacheable: BTreeMap<(String, String), Vec<CachedEvent>> = BTreeMap::new();
     // Counted before the cap below, so volume survives the sampling.
     let mut observed: BTreeMap<String, usize> = BTreeMap::new();
+    // Types seen on the external bus, by count. Never graded: they only speak
+    // for a type the bus's own group did not show.
+    let mut redacted_seen: BTreeMap<String, usize> = BTreeMap::new();
 
     // Concurrent: the groups are independent AWS calls, and scanning them one
     // after another spent the whole budget twice over in wall-clock for no
@@ -673,6 +712,7 @@ pub async fn registry_report(
     let outcomes = futures::future::join_all(log_groups.iter().map(|group| {
         let logs = logs.clone();
         let group = group.clone();
+        let max_events = events_for(&group);
         let progress_app = app.clone();
         let scanned_so_far = &scanned_so_far;
         async move {
@@ -683,7 +723,7 @@ pub async fn registry_report(
                     pattern: None,
                     start_time,
                     end_time: scan_end,
-                    max_events: per_group_events,
+                    max_events,
                     budget: std::time::Duration::from_secs(budget_seconds),
                     stripes: log_scan::DEFAULT_STRIPES,
                 },
@@ -706,20 +746,35 @@ pub async fn registry_report(
     for outcome in outcomes {
         let (group, outcome) = outcome?;
 
+        let redacted = Environment::is_redacted_copy(&group);
         scanned += outcome.scanned;
-        truncated |= outcome.truncated;
+        // The external scan's small share runs out on almost every report;
+        // that says nothing about whether the graded sample is complete.
+        truncated |= outcome.truncated && !redacted;
         scan_note = scan_note.or(outcome.note.clone());
         scan_stripes = scan_stripes.max(outcome.stripes);
         scan_ms = scan_ms.max(outcome.elapsed_ms);
 
         for (source, detail_type, cached) in outcome.events {
             let key = format!("{source}@{detail_type}");
-            *observed.entry(key.clone()).or_default() += 1;
-            let bucket = buckets.entry(key.clone()).or_default();
-            // A handful of events characterises a type; keeping thousands of
-            // identical payloads would blow memory for no extra signal.
-            if bucket.len() < 50 {
-                bucket.push(cached.detail.clone());
+            let kept = if redacted {
+                let seen = redacted_seen.entry(key.clone()).or_default();
+                *seen += 1;
+                *seen <= 50
+            } else {
+                *observed.entry(key.clone()).or_default() += 1;
+                let bucket = buckets.entry(key.clone()).or_default();
+                // A handful of events characterises a type; keeping thousands
+                // of identical payloads would blow memory for no extra signal.
+                let kept = bucket.len() < 50;
+                if kept {
+                    bucket.push(cached.detail.clone());
+                }
+                kept
+            };
+            // The external copies are cached too: nothing grades them, but
+            // `event_sources` reads the cache for what flows.
+            if kept {
                 cacheable
                     .entry((group.clone(), key))
                     .or_default()
@@ -769,6 +824,11 @@ pub async fn registry_report(
     let bucket_keys: Vec<String> = buckets.keys().cloned().collect();
     let sanitized_buckets = sanitized_bucket_index(&bucket_keys);
 
+    // Only the types the external bus showed and the bus's own group did not.
+    redacted_seen.retain(|key, _| !buckets.contains_key(key));
+    let redacted_keys: Vec<String> = redacted_seen.keys().cloned().collect();
+    let sanitized_redacted = sanitized_bucket_index(&redacted_keys);
+
     for name in &names {
         let Ok(identity) = EventIdentity::from_schema_name(name) else {
             continue;
@@ -781,13 +841,31 @@ pub async fn registry_report(
                 matched.insert(key.clone());
                 to_grade.push((name.clone(), identity, key));
             }
-            None => rows.push(ReportRow {
-                name: name.clone(),
-                source: identity.source,
-                detail_type: identity.detail_type,
-                status: RowStatus::NoTraffic,
-                ..Default::default()
-            }),
+            None => {
+                // Flowing, but only as the external bus's copies. Grading those
+                // would report every field it strips as missing, so the row
+                // says the type flows and grades nothing.
+                let (observed, headline) =
+                    match match_bucket(&identity, &redacted_seen, &sanitized_redacted) {
+                        Some(key) => {
+                            let seen = redacted_seen[&key];
+                            matched.insert(key);
+                            (seen, Some(format!(
+                                "Seen {seen} time(s) only on the external bus, whose copies are redacted, so there is nothing to grade"
+                            )))
+                        }
+                        None => (0, None),
+                    };
+                rows.push(ReportRow {
+                    name: name.clone(),
+                    source: identity.source,
+                    detail_type: identity.detail_type,
+                    observed,
+                    status: RowStatus::NoTraffic,
+                    headline,
+                    ..Default::default()
+                });
+            }
         }
     }
 
@@ -901,16 +979,19 @@ pub async fn registry_report(
 
     rows.append(&mut graded_rows);
 
-    // Anything on the bus that no schema claimed.
+    // Anything on the bus that no schema claimed — including a type seen only
+    // on the external bus, which is still a type with no schema.
     let mut unregistered: Vec<UnregisteredEvent> = buckets
         .iter()
+        .map(|(key, payloads)| (key, observed.get(key).copied().unwrap_or(payloads.len())))
+        .chain(redacted_seen.iter().map(|(key, count)| (key, *count)))
         .filter(|(key, _)| !matched.contains(*key))
-        .filter_map(|(key, payloads)| {
+        .filter_map(|(key, count)| {
             key.split_once('@')
                 .map(|(source, detail_type)| UnregisteredEvent {
                     source: source.to_string(),
                     detail_type: detail_type.to_string(),
-                    count: observed.get(key).copied().unwrap_or(payloads.len()),
+                    count,
                 })
         })
         .collect();
@@ -991,10 +1072,7 @@ pub async fn draft_from_events(
     }
 
     let (env, cfg) = state.env_config(env_id.as_deref()).await?;
-    // Every group: an undocumented event type is *more* likely than most to
-    // have arrived over the bridge, which is exactly the traffic reading only
-    // the first group misses.
-    let groups = resolve_log_groups(&env, log_group)?;
+    let groups = graded_log_groups(&env, log_group)?;
 
     let minutes = minutes.unwrap_or(60 * 24).max(1);
     let now = crate::events_cache::now_ms();
@@ -1193,8 +1271,7 @@ mod tests {
 
     #[test]
     fn scans_every_configured_log_group_not_just_the_first() {
-        // Events reaching the bus over the bridge land in the external group.
-        // Reading only the first made an unregistered external event type
+        // Reading only the first made a type seen only on the external bus
         // invisible, so the report claimed zero missing schemas while Slack
         // was alerting about one.
         let env = env_with(vec![
@@ -1222,6 +1299,31 @@ mod tests {
             resolve_log_groups(&env, Some("  ".into())).unwrap().len(),
             2
         );
+    }
+
+    #[test]
+    fn grades_only_the_bus_group_never_the_external_copies() {
+        // The external bus logs each event after cutting it down:
+        // `payment-authorized` arrives there as `{clientId}` alone. Graded,
+        // those copies showed half of every bridged type's events as missing
+        // fields the producer had sent.
+        let env = env_with(vec![
+            "/aws/events/prd-global-events",
+            "/aws/events/prd-external-events",
+        ]);
+        let bus = vec!["/aws/events/prd-global-events".to_string()];
+        assert_eq!(graded_log_groups(&env, None).unwrap(), bus);
+        // Asked for by name — a watch hit on the external bus — the full event
+        // is still read from the bus's own group.
+        assert_eq!(
+            graded_log_groups(&env, Some("/aws/events/prd-external-events".into())).unwrap(),
+            bus,
+        );
+        assert_eq!(
+            graded_log_groups(&env, Some("/just-this-one".into())).unwrap(),
+            vec!["/just-this-one".to_string()],
+        );
+        assert!(graded_log_groups(&env_with(vec!["/aws/events/prd-external-events"]), None).is_err());
     }
 
     #[test]
@@ -1372,7 +1474,7 @@ pub async fn issues_for_schemas(
     env_id: Option<String>,
 ) -> Result<Vec<SchemaIssues>> {
     let (env, cfg) = state.env_config(env_id.as_deref()).await?;
-    let log_groups = resolve_log_groups(&env, log_group)?;
+    let log_groups = graded_log_groups(&env, log_group)?;
     let schemas = aws_sdk_schemas::Client::new(&cfg);
     let minutes = minutes.unwrap_or(60 * 24).max(1);
 
@@ -1586,7 +1688,7 @@ pub async fn events_for_issue(
     let document = model::parse_content(&request.content)?;
     let type_name = detail_type_name(&document, request.type_name.as_deref())?;
     let env = state.resolve_environment(env_id.as_deref()).await?;
-    let log_groups = resolve_log_groups(&env, None)?;
+    let log_groups = graded_log_groups(&env, None)?;
     let minutes = request.minutes.unwrap_or(60 * 24).max(1);
     let now = crate::events_cache::now_ms();
     let start = now - minutes * 60 * 1000;
@@ -1620,6 +1722,80 @@ pub async fn events_for_issue(
         }
     }
     Ok(out)
+}
+
+/// What the cached events say about the shape of one field.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatternRequest {
+    pub name: String,
+    /// Dotted path within the payload, as the tree names it.
+    pub path: String,
+    pub minutes: Option<i64>,
+}
+
+/// What the events say about one field, for the two questions a schema asks
+/// about a string: what shape is it, and is it a fixed set of values.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldSample {
+    /// The shape every sampled value shares, when they share one.
+    pub pattern: Option<String>,
+    /// The distinct values, in the order first seen.
+    pub values: Vec<Value>,
+    /// Events read, so a blank answer can say which of the reasons it is.
+    pub sampled: usize,
+    /// Whether the sampler stopped counting distinct values, which makes
+    /// `values` "at least this many" rather than all of them. Reported rather
+    /// than left for the caller to infer from the length, which would mean
+    /// the cap being written down in two languages.
+    pub capped: bool,
+}
+
+/// What the cached events carry at one field's path.
+///
+/// Reads the event cache, so it costs nothing and needs no AWS call — and
+/// reports the sample alongside the answer, so the caller can say why there
+/// is no answer rather than appearing to do nothing.
+#[tauri::command]
+pub async fn field_sample(
+    state: State<'_, AppState>,
+    request: PatternRequest,
+    env_id: Option<String>,
+) -> Result<FieldSample> {
+    let identity = EventIdentity::from_schema_name(&request.name)?;
+    let env = state.resolve_environment(env_id.as_deref()).await?;
+    let log_groups = graded_log_groups(&env, None)?;
+    let minutes = request.minutes.unwrap_or(60 * 24).max(1);
+    let now = crate::events_cache::now_ms();
+
+    let payloads: Vec<Value> = state
+        .events
+        .events_across(
+            &env.id,
+            &log_groups,
+            &identity.source,
+            &identity.detail_type,
+            now - minutes * 60 * 1000,
+            now,
+        )
+        .await
+        .into_iter()
+        .map(|event| event.detail)
+        .collect();
+
+    // Already distinct and in first-seen order: the sampler deduplicates as
+    // it goes, so counting them again would only walk the same list twice.
+    let values = events::values_at(&payloads, &request.path);
+
+    Ok(FieldSample {
+        // Every string, not only the listed ones: the pattern has to hold for
+        // the whole sample, not the first few distinct values of it.
+        pattern: crate::schema::shape::common_pattern(&events::strings_at(&payloads, &request.path)),
+        capped: values.len() >= events::VALUE_SAMPLE_CAP,
+        sampled: payloads.len(),
+        values,
+    })
 }
 
 /// Check one event, as caught by a watch, against the schema registered for
