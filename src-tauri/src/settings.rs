@@ -48,10 +48,10 @@ impl Environment {
             sso: None,
             region: DEFAULT_REGION.to_string(),
             registry_name: format!("{stage}-global-registry"),
-            log_groups: vec![
-                format!("/aws/events/{stage}-global-events"),
-                format!("/aws/events/{stage}-external-events"),
-            ],
+            // The bus's own group only. `{stage}-external-events` holds the
+            // external bus's redacted copies, which are never graded; it can
+            // be added in Settings to list the rare type seen only there.
+            log_groups: vec![format!("/aws/events/{stage}-global-events")],
             protected: stage == "prd",
         }
     }
@@ -791,12 +791,7 @@ mod tests {
         let env = Environment::for_stage("dev", "some-profile");
         assert_eq!(env.registry_name, "dev-global-registry");
         assert_eq!(env.region, "us-east-2");
-        assert!(env
-            .log_groups
-            .contains(&"/aws/events/dev-global-events".to_string()));
-        assert!(env
-            .log_groups
-            .contains(&"/aws/events/dev-external-events".to_string()));
+        assert_eq!(env.log_groups, vec!["/aws/events/dev-global-events".to_string()]);
         assert!(!env.is_protected());
     }
 

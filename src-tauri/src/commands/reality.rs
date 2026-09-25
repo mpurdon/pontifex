@@ -133,12 +133,11 @@ async fn fetch_schema(
 
 /// Every log group a scan should read, or just the one asked for.
 ///
-/// An environment normally carries two — `{stage}-global-events` and
-/// `{stage}-external-events`. The second holds the external bus's redacted
-/// copies (see [`Environment::is_redacted_copy`]), which are still worth
-/// reading to learn that a type flows: reading only the first made a type seen
-/// only there invisible rather than listed as unregistered. What an event
-/// *contains* comes from [`graded_log_groups`] instead.
+/// By default only `{stage}-global-events`. An environment can also list
+/// `{stage}-external-events`, the external bus's redacted copies (see
+/// [`Environment::is_redacted_copy`]), which are worth reading only to learn
+/// that a type flows — a type seen nowhere else is then listed as
+/// unregistered. What an event *contains* comes from [`graded_log_groups`].
 fn resolve_log_groups(env: &Environment, requested: Option<String>) -> Result<Vec<String>> {
     if let Some(one) = requested.filter(|g| !g.trim().is_empty()) {
         return Ok(vec![one]);
